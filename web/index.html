@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AF3 · AgentFastFuriosForecaster</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./styles.css?v=1">
+</head>
+<body data-step="1">
+  <canvas id="space" aria-hidden="true"></canvas>
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="AF3 home">
+      <span class="brand-mark">AF<sup>3</sup></span>
+      <span><strong>AgentFastFuriosForecaster</strong><small>Intergalactic Forecast Intelligence</small></span>
+    </a>
+    <div class="stepper" aria-label="Workflow progress">
+      <button class="step-node active" data-go="1" type="button"><b>01</b><span>DATA DOCK</span></button>
+      <i></i>
+      <button class="step-node" data-go="2" type="button"><b>02</b><span>MODEL BAY</span></button>
+      <i></i>
+      <button class="step-node" data-go="3" type="button"><b>03</b><span>ORBITAL RESULTS</span></button>
+    </div>
+    <div class="system-status"><span></span> AF3 ONLINE</div>
+  </header>
+
+  <main>
+    <section class="page active" id="step1" aria-labelledby="step1Title">
+      <div class="page-heading">
+        <div><span class="eyebrow">MISSION 01 · RANDOM ASTEROID BELT</span><h1 id="step1Title">Prime the data engines.</h1></div>
+        <div class="mission-chip">INPUT / CALIBRATION</div>
+      </div>
+
+      <div class="split-layout">
+        <section class="glass control-panel">
+          <div class="panel-kicker">01 / FLIGHT DATA</div>
+          <label class="upload-zone" id="uploadZone" for="fileInput">
+            <input id="fileInput" type="file" accept=".csv,.xlsx,.xlsm,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+            <span class="upload-icon">⇧</span>
+            <strong>DROP EXCEL / CSV FLIGHT DATA</strong>
+            <small>or click to browse · up to 25 MB</small>
+            <em id="fileName">No telemetry attached</em>
+          </label>
+          <button class="text-button" id="demoData" type="button">Load AF3 demo signal instead</button>
+
+          <div class="field-stack">
+            <label><span>Forecast target column</span><select id="targetColumn" disabled><option>Awaiting dataset…</option></select></label>
+            <label><span>Timeline / label column</span><select id="timeColumn" disabled><option>Row index</option></select></label>
+            <label><span>Seasonality frequency</span>
+              <select id="frequency">
+                <option value="1">1 · None</option><option value="4">4 · Quarterly</option>
+                <option value="7">7 · Weekly cycle</option><option value="12" selected>12 · Monthly</option>
+                <option value="24">24 · Hourly / half-day</option><option value="52">52 · Weekly / annual</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="partition-control">
+            <div><span>Training data partition</span><output id="trainOut">80%</output></div>
+            <input id="trainPct" type="range" min="55" max="90" value="80">
+            <div class="range-ends"><span>55%</span><span>90%</span></div>
+          </div>
+          <div class="dataset-meta" id="datasetMeta">Attach data to initialize the signal array.</div>
+        </section>
+
+        <section class="glass chart-panel">
+          <div class="panel-head"><div><span class="panel-kicker">LIVE SIGNAL</span><h2 id="seriesTitle">Train / test partition</h2></div><div class="legend"><span class="train">TRAIN</span><span class="test">TEST</span></div></div>
+          <div class="canvas-wrap tall"><canvas id="seriesChart"></canvas><div class="empty-chart" id="seriesEmpty">SELECT A TARGET SIGNAL<br><small>Trajectory appears here</small></div></div>
+          <div class="chart-readout"><span>TRAIN <b id="trainCount">—</b></span><span>TEST <b id="testCount">—</b></span><span>FREQ <b id="freqReadout">12</b></span></div>
+        </section>
+      </div>
+
+      <div class="launch-row">
+        <button class="mega-button green" id="decomposeBtn" type="button" disabled><small>DIAGNOSTIC ARRAY</small>SHOW DECOMPOSITION <span>⌁</span></button>
+        <button class="mega-button proceed" id="proceedBtn" type="button" disabled><small>NEXT CHECKPOINT</small>PROCEED <span>→</span></button>
+      </div>
+
+      <section class="glass decomposition hidden" id="decompositionPanel">
+        <div class="panel-head"><div><span class="panel-kicker">CLASSICAL DECOMPOSITION</span><h2>Observed · trend · seasonal · remainder</h2></div><button class="icon-close" id="closeDecomp" type="button">×</button></div>
+        <div class="decomp-grid">
+          <div><span>OBSERVED</span><canvas id="decompObserved"></canvas></div>
+          <div><span>TREND</span><canvas id="decompTrend"></canvas></div>
+          <div><span>SEASONAL</span><canvas id="decompSeasonal"></canvas></div>
+          <div><span>REMAINDER</span><canvas id="decompRemainder"></canvas></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="page" id="step2" aria-labelledby="step2Title">
+      <div class="page-heading">
+        <div><span class="eyebrow">MISSION 02 · BINARY STAR VICINITY</span><h1 id="step2Title">Choose your forecast fleet.</h1></div>
+        <div class="mission-chip amber">MODEL / HYPERDRIVE</div>
+      </div>
+      <div class="model-layout">
+        <section class="glass model-selector">
+          <div class="panel-head"><div><span class="panel-kicker">FORECAST ENGINES</span><h2>Select models to launch</h2></div><button class="text-button" id="selectAll" type="button">Select all</button></div>
+          <div class="model-cards">
+            <label><input type="checkbox" name="model" value="SES" checked><span><b>SES</b><small>Level pulse</small><i></i></span></label>
+            <label><input type="checkbox" name="model" value="Holt" checked><span><b>HOLT</b><small>Trend drive</small><i></i></span></label>
+            <label><input type="checkbox" name="model" value="Holt-Winters" checked><span><b>HOLTWINTER</b><small>Seasonal array</small><i></i></span></label>
+            <label><input type="checkbox" name="model" value="ARIMA" checked><span><b>ARIMA</b><small>Lag navigator</small><i></i></span></label>
+            <label><input type="checkbox" name="model" value="ETS" checked><span><b>ETS</b><small>State-space core</small><i></i></span></label>
+            <label><input type="checkbox" name="model" value="NNETAR" checked><span><b>NNETAR</b><small>Neural thruster</small><i></i></span></label>
+          </div>
+        </section>
+
+        <section class="glass tuning-card ets-card">
+          <div class="tech-badge">ETS</div><span class="panel-kicker">STATE-SPACE PARAMETERS</span><h2>ETS configuration</h2>
+          <div class="field-stack compact">
+            <label><span>Error type</span><select id="etsError"><option>Additive</option><option>Multiplicative</option><option>Automatic</option></select></label>
+            <label><span>Trend type</span><select id="etsTrend"><option>Additive</option><option>Multiplicative</option><option>None</option><option>Automatic</option></select></label>
+            <label><span>Seasonality type</span><select id="etsSeason"><option>Additive</option><option>Multiplicative</option><option>None</option><option>Automatic</option></select></label>
+          </div>
+          <div class="toggle-row"><span>Allow multiplicative trend</span><label class="switch"><input id="etsAllowMultiplicative" type="checkbox" checked><i></i></label></div>
+          <div class="toggle-row"><span>Restrict model</span><label class="switch"><input id="etsRestrict" type="checkbox"><i></i></label></div>
+        </section>
+
+        <section class="glass tuning-card nnet-card">
+          <div class="tech-badge violet">NN</div><span class="panel-kicker">NEURAL PARAMETERS</span><h2>NNETAR configuration</h2>
+          <div class="slider-list">
+            <label><span>p <output id="pOut">6</output></span><input id="nnetP" type="range" min="1" max="24" value="6"></label>
+            <label><span>P <output id="POut">1</output></span><input id="nnetSP" type="range" min="0" max="4" value="1"></label>
+            <label><span>size <output id="sizeOut">8</output></span><input id="nnetSize" type="range" min="2" max="32" value="8"></label>
+            <label><span>repeats <output id="repeatsOut">8</output></span><input id="nnetRepeats" type="range" min="1" max="20" value="8"></label>
+            <label><span>lambda <output id="lambdaOut">0.01</output></span><input id="nnetLambda" type="range" min="-5" max="0" value="-2"></label>
+          </div>
+        </section>
+      </div>
+      <div class="page-actions"><button class="back-button" data-go="1" type="button">← PREVIOUS PAGE</button><button class="mega-button run" id="runModels" type="button"><small>IGNITE FORECAST FLEET</small>RUN SELECTED MODELS <span>◢</span></button></div>
+    </section>
+
+    <section class="page" id="step3" aria-labelledby="step3Title">
+      <div class="page-heading">
+        <div><span class="eyebrow">MISSION 03 · BLACK HOLE ACCRETION ORBIT</span><h1 id="step3Title">Forecast telemetry received.</h1></div>
+        <div class="mission-chip magenta">RESULTS / EVALUATION</div>
+      </div>
+      <div class="results-status" id="resultsStatus"><span class="pulse"></span><b>MODEL ARRAY READY</b><small id="resultSummary">Awaiting model launch</small></div>
+      <div class="results-grid">
+        <section class="glass result-card performance"><div class="panel-head"><div><span class="panel-kicker">PERFORMANCE SPACE</span><h2>RMSE vs correlation</h2></div><span class="chart-no">01</span></div><div class="canvas-wrap"><canvas id="performanceChart"></canvas></div></section>
+        <section class="glass result-card forecast"><div class="panel-head"><div><span class="panel-kicker">TEST HORIZON</span><h2>Actual vs model forecasts</h2></div><span class="chart-no">02</span></div><div class="canvas-wrap"><canvas id="forecastChart"></canvas></div></section>
+        <section class="glass result-card ensemble"><div class="panel-head"><div><span class="panel-kicker">TRI-CORE CONSENSUS</span><h2>ARIMA + ETS + NNETAR ensemble</h2></div><span class="chart-no">03</span></div><div class="canvas-wrap"><canvas id="ensembleChart"></canvas><div class="empty-chart hidden" id="ensembleEmpty">SELECT ARIMA, ETS & NNETAR<br><small>All three are required for the equal-average ensemble</small></div></div></section>
+      </div>
+      <div class="metrics-strip" id="metricsStrip"></div>
+      <div class="page-actions"><button class="back-button" data-go="2" type="button">← PREVIOUS PAGE</button><button class="back-button bright" data-go="1" type="button">NEW MISSION ↻</button></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="loading-overlay hidden" id="loading"><div class="warp-ring"></div><strong>ENGAGING MODEL THRUSTERS</strong><span id="loadingText">Crossing the forecast event horizon…</span></div>
+  <script src="./app.js?v=1"></script>
+</body>
+</html>

@@ -1,0 +1,277 @@
+const $ = (id) => document.getElementById(id);
+const state = { step: 1, rows: [], columns: [], numeric: [], series: [], labels: [], results: null, particles: [], mouse: { x: 0, y: 0 } };
+const colors = { Actual: '#f4fbff', SES: '#6dff9d', Holt: '#ffca55', 'Holt-Winters': '#ff7c65', ARIMA: '#57e9ff', ETS: '#b56bff', NNETAR: '#ff62c6', Ensemble: '#72ffb2' };
+
+function toast(message) {
+  $('toast').textContent = message;
+  $('toast').classList.add('show');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => $('toast').classList.remove('show'), 4200);
+}
+
+function safeNumber(value) {
+  const n = Number(String(value ?? '').replaceAll(',', '').trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function demoDataset() {
+  const rows = [];
+  for (let i = 0; i < 120; i += 1) {
+    const date = new Date(2016, i, 1);
+    const signal = 210 + i * 1.18 + Math.sin(i * Math.PI / 6) * 32 + Math.cos(i * .29) * 11 + Math.sin(i * 1.7) * 4;
+    rows.push({ Month: date.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit' }), 'Orbital Demand': signal.toFixed(2), 'Fuel Index': (70 + Math.sin(i / 5) * 8).toFixed(2) });
+  }
+  loadDataset({ name: 'af3_demo_signal.csv', columns: ['Month', 'Orbital Demand', 'Fuel Index'], numeric_columns: ['Orbital Demand', 'Fuel Index'], rows, row_count: rows.length });
+}
+
+async function uploadFile(file) {
+  if (!file) return;
+  $('fileName').textContent = `Uploading ${file.name}…`;
+  try {
+    const response = await fetch('/api/upload', { method: 'POST', headers: { 'X-Filename': file.name }, body: file });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(payload.error || 'Upload failed.');
+    loadDataset(payload);
+  } catch (error) {
+    $('fileName').textContent = 'Upload rejected';
+    toast(error.message);
+  }
+}
+
+function loadDataset(payload) {
+  state.rows = payload.rows || [];
+  state.columns = payload.columns || [];
+  state.numeric = payload.numeric_columns || [];
+  $('fileName').textContent = `${payload.name} · ${payload.row_count.toLocaleString()} rows${payload.sheet ? ` · ${payload.sheet}` : ''}`;
+  const target = $('targetColumn');
+  target.innerHTML = state.numeric.length ? state.numeric.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('') : '<option>No numeric columns detected</option>';
+  target.disabled = !state.numeric.length;
+  const time = $('timeColumn');
+  time.innerHTML = '<option value="">Row index</option>' + state.columns.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+  time.disabled = false;
+  const probableTime = state.columns.find((name) => /date|time|month|year|period/i.test(name));
+  if (probableTime) time.value = probableTime;
+  $('datasetMeta').textContent = `${payload.row_count.toLocaleString()} observations received · ${state.columns.length} columns · ${state.numeric.length} numeric signals`;
+  $('decomposeBtn').disabled = !state.numeric.length;
+  $('proceedBtn').disabled = !state.numeric.length;
+  updateSeries();
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
+}
+
+function updateSeries() {
+  if (!state.rows.length || !$('targetColumn').value) return;
+  const target = $('targetColumn').value;
+  const time = $('timeColumn').value;
+  const pairs = state.rows.map((row, i) => ({ value: safeNumber(row[target]), label: time ? row[time] : i + 1 })).filter((item) => item.value !== null);
+  state.series = pairs.map((item) => item.value);
+  state.labels = pairs.map((item) => String(item.label ?? ''));
+  $('seriesTitle').textContent = target;
+  $('seriesEmpty').classList.toggle('hidden', state.series.length > 0);
+  updatePartition();
+  if (!$('decompositionPanel').classList.contains('hidden')) drawDecomposition();
+}
+
+function updatePartition() {
+  const pct = Number($('trainPct').value);
+  $('trainOut').textContent = `${pct}%`;
+  const split = Math.max(1, Math.min(state.series.length - 1, Math.round(state.series.length * pct / 100)));
+  $('trainCount').textContent = state.series.length ? split : '—';
+  $('testCount').textContent = state.series.length ? state.series.length - split : '—';
+  $('freqReadout').textContent = $('frequency').value;
+  drawSeriesChart(split);
+}
+
+function fitCanvas(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  canvas.width = Math.round(rect.width * dpr); canvas.height = Math.round(rect.height * dpr);
+  const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
+  return { ctx, width: rect.width, height: rect.height };
+}
+
+function bounds(seriesList) {
+  const values = seriesList.flat().filter(Number.isFinite);
+  let min = Math.min(...values), max = Math.max(...values);
+  if (!values.length) return { min: 0, max: 1 };
+  const pad = Math.max((max - min) * .12, Math.abs(max) * .03, 1);
+  return { min: min - pad, max: max + pad };
+}
+
+function chartBase(canvas, seriesList, yLabel = '') {
+  const fit = fitCanvas(canvas); if (!fit) return null;
+  const { ctx, width, height } = fit;
+  const area = { x: 55, y: 18, w: width - 72, h: height - 55 };
+  const range = bounds(seriesList);
+  ctx.clearRect(0, 0, width, height);
+  ctx.font = '9px Space Mono, monospace'; ctx.fillStyle = '#6f899c'; ctx.strokeStyle = 'rgba(100,190,225,.12)'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const y = area.y + area.h * i / 4; ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
+    const value = range.max - (range.max - range.min) * i / 4; ctx.fillText(compact(value), 4, y + 3);
+  }
+  if (yLabel) { ctx.save(); ctx.translate(12, height / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(yLabel, 0, 0); ctx.restore(); }
+  return { ctx, width, height, area, ...range };
+}
+
+function compact(value) {
+  const abs = Math.abs(value);
+  return abs >= 1000000 ? `${(value / 1000000).toFixed(1)}m` : abs >= 1000 ? `${(value / 1000).toFixed(1)}k` : value.toFixed(abs < 10 ? 2 : 1);
+}
+
+function line(ctx, values, chart, color, start = 0, total = values.length, width = 2.2, dash = []) {
+  const { area, min, max } = chart; ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash); ctx.shadowColor = color; ctx.shadowBlur = width > 2 ? 9 : 0;
+  let begun = false;
+  values.forEach((value, i) => {
+    if (!Number.isFinite(value) || i < start) return;
+    const x = area.x + (i / Math.max(1, total - 1)) * area.w;
+    const y = area.y + (1 - (value - min) / Math.max(1e-9, max - min)) * area.h;
+    if (!begun) { ctx.moveTo(x, y); begun = true; } else ctx.lineTo(x, y);
+  });
+  ctx.stroke(); ctx.shadowBlur = 0; ctx.setLineDash([]);
+}
+
+function drawSeriesChart(split) {
+  if (!state.series.length) return;
+  const chart = chartBase($('seriesChart'), [state.series]); if (!chart) return;
+  const train = state.series.map((v, i) => i < split ? v : NaN);
+  const test = state.series.map((v, i) => i >= split - 1 ? v : NaN);
+  line(chart.ctx, train, chart, colors.ARIMA, 0, state.series.length, 3.2);
+  line(chart.ctx, test, chart, colors['Holt-Winters'], split - 1, state.series.length, 3.2);
+  const x = chart.area.x + ((split - .5) / Math.max(1, state.series.length - 1)) * chart.area.w;
+  chart.ctx.strokeStyle = 'rgba(255,255,255,.28)'; chart.ctx.setLineDash([3, 5]); chart.ctx.beginPath(); chart.ctx.moveTo(x, chart.area.y); chart.ctx.lineTo(x, chart.area.y + chart.area.h); chart.ctx.stroke(); chart.ctx.setLineDash([]);
+  chart.ctx.fillStyle = '#7c96a8'; chart.ctx.font = '8px Space Mono'; chart.ctx.fillText('SPLIT', x + 5, chart.area.y + 11);
+}
+
+function movingAverage(values, period) {
+  const half = Math.floor(period / 2);
+  return values.map((_, i) => {
+    const from = Math.max(0, i - half), to = Math.min(values.length, i + half + 1);
+    return values.slice(from, to).reduce((a, b) => a + b, 0) / (to - from);
+  });
+}
+
+function drawMini(canvas, values, color) {
+  const chart = chartBase(canvas, [values]); if (!chart) return; line(chart.ctx, values, chart, color, 0, values.length, 1.8);
+}
+
+function drawDecomposition() {
+  const period = Math.max(1, Number($('frequency').value));
+  const observed = state.series;
+  const trend = movingAverage(observed, Math.min(period, Math.max(2, Math.floor(observed.length / 3))));
+  const detrended = observed.map((v, i) => v - trend[i]);
+  const seasonalPattern = Array.from({ length: period }, (_, phase) => {
+    const vals = detrended.filter((_, i) => i % period === phase); return vals.reduce((a, b) => a + b, 0) / Math.max(1, vals.length);
+  });
+  const seasonal = observed.map((_, i) => seasonalPattern[i % period]);
+  const remainder = observed.map((v, i) => v - trend[i] - seasonal[i]);
+  drawMini($('decompObserved'), observed, colors.Actual); drawMini($('decompTrend'), trend, colors.ARIMA); drawMini($('decompSeasonal'), seasonal, colors.ETS); drawMini($('decompRemainder'), remainder, colors['Holt-Winters']);
+}
+
+function navigate(step) {
+  if (step > 1 && !state.series.length) { toast('Load a numeric time series before leaving the data dock.'); return; }
+  if (step === 3 && !state.results) { toast('Run at least one model before entering the results orbit.'); return; }
+  state.step = step; document.body.dataset.step = step;
+  document.querySelectorAll('.page').forEach((page, i) => page.classList.toggle('active', i + 1 === step));
+  document.querySelectorAll('.step-node').forEach((node, i) => { node.classList.toggle('active', i + 1 === step); node.classList.toggle('complete', i + 1 < step); });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (step === 1) requestAnimationFrame(updatePartition);
+  if (step === 3) requestAnimationFrame(drawResults);
+}
+
+function playLaunchSound() {
+  try {
+    const Audio = window.AudioContext || window.webkitAudioContext; const ac = new Audio(); const now = ac.currentTime;
+    const gain = ac.createGain(); gain.connect(ac.destination); gain.gain.setValueAtTime(.001, now); gain.gain.exponentialRampToValueAtTime(.22, now + .12); gain.gain.exponentialRampToValueAtTime(.001, now + 1.45);
+    const osc = ac.createOscillator(); osc.type = 'sawtooth'; osc.frequency.setValueAtTime(55, now); osc.frequency.exponentialRampToValueAtTime(420, now + 1.2); osc.connect(gain); osc.start(now); osc.stop(now + 1.5);
+    const buffer = ac.createBuffer(1, ac.sampleRate * 1.3, ac.sampleRate); const data = buffer.getChannelData(0); for (let i = 0; i < data.length; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+    const noise = ac.createBufferSource(); const filter = ac.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.setValueAtTime(180, now); filter.frequency.exponentialRampToValueAtTime(1700, now + 1); noise.buffer = buffer; noise.connect(filter); filter.connect(gain); noise.start(now);
+  } catch (_) { /* Audio is cosmetic. */ }
+}
+
+async function runModels() {
+  const models = [...document.querySelectorAll('input[name=model]:checked')].map((input) => input.value);
+  if (!models.length) { toast('Select at least one forecast engine.'); return; }
+  playLaunchSound(); $('loading').classList.remove('hidden');
+  setTimeout(() => { $('loadingText').textContent = 'Synchronizing model trajectories…'; }, 450);
+  try {
+    const payload = { series: state.series, train_pct: Number($('trainPct').value), frequency: Number($('frequency').value), models, params: { ets: { error: $('etsError').value, trend: $('etsTrend').value, season: $('etsSeason').value, allow_multiplicative_trend: $('etsAllowMultiplicative').checked, restrict: $('etsRestrict').checked }, nnetar: { p: Number($('nnetP').value), P: Number($('nnetSP').value), size: Number($('nnetSize').value), repeats: Number($('nnetRepeats').value), lambda: 10 ** Number($('nnetLambda').value) } } };
+    const response = await fetch('/api/forecast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const result = await response.json(); if (!response.ok || !result.ok) throw new Error(result.error || 'Forecast run failed.');
+    state.results = result; navigate(3);
+  } catch (error) { toast(error.message); } finally { $('loading').classList.add('hidden'); $('loadingText').textContent = 'Crossing the forecast event horizon…'; }
+}
+
+function legend(ctx, items, width, y = 16) {
+  ctx.font = '8px Space Mono'; let x = 58;
+  items.forEach((item) => { if (x > width - 95) return; ctx.fillStyle = item.color; ctx.fillRect(x, y, 14, 3); ctx.fillStyle = '#91aabd'; ctx.fillText(item.name, x + 19, y + 4); x += 35 + item.name.length * 6; });
+}
+
+function drawPerformance() {
+  const results = state.results.results;
+  const fit = fitCanvas($('performanceChart')); if (!fit) return; const { ctx, width, height } = fit;
+  const xVals = results.map(r => r.rmse), yVals = results.map(r => r.correlation); const xb = bounds([xVals]), yb = { min: Math.min(-.05, ...yVals) - .05, max: Math.max(.2, ...yVals) + .08 };
+  const area = { x: 58, y: 24, w: width - 82, h: height - 65 }; ctx.clearRect(0, 0, width, height); ctx.font = '8px Space Mono';
+  for (let i = 0; i <= 4; i += 1) { const x = area.x + area.w * i / 4, y = area.y + area.h * i / 4; ctx.strokeStyle = 'rgba(100,190,225,.12)'; ctx.beginPath(); ctx.moveTo(x, area.y); ctx.lineTo(x, area.y + area.h); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke(); ctx.fillStyle = '#698497'; ctx.fillText(compact(xb.min + (xb.max - xb.min) * i / 4), x - 8, height - 20); ctx.fillText((yb.max - (yb.max - yb.min) * i / 4).toFixed(2), 12, y + 3); }
+  results.forEach((r, i) => { const x = area.x + (r.rmse - xb.min) / (xb.max - xb.min) * area.w, y = area.y + (1 - (r.correlation - yb.min) / (yb.max - yb.min)) * area.h; const color = colors[r.name] || colors.ARIMA; ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 14; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0; ctx.fillStyle = '#d8edf5'; ctx.fillText(r.name, x + 9, y - 7 - (i % 2) * 7); });
+  ctx.fillStyle = '#7691a4'; ctx.fillText('LOWER RMSE  ←', area.x, height - 4); ctx.fillText('CORRELATION', 4, 11);
+}
+
+function drawForecasts() {
+  const actual = state.results.actual, items = [{ name: 'Actual', color: colors.Actual, values: actual }, ...state.results.results.map(r => ({ name: r.name, color: colors[r.name], values: r.forecast }))];
+  const chart = chartBase($('forecastChart'), items.map(i => i.values)); if (!chart) return; items.forEach((item, i) => line(chart.ctx, item.values, chart, item.color, 0, actual.length, i ? 1.6 : 3, i ? [] : [])); legend(chart.ctx, items, chart.width, 9); drawTimeAxis(chart, state.labels.slice(state.results.split));
+}
+
+function drawTimeAxis(chart, labels) {
+  if (!labels.length) return;
+  const ticks = [...new Set([0, Math.floor((labels.length - 1) / 3), Math.floor((labels.length - 1) * 2 / 3), labels.length - 1])];
+  chart.ctx.font = '8px Space Mono'; chart.ctx.fillStyle = '#6f899c';
+  ticks.forEach(i => { const x = chart.area.x + i / Math.max(1, labels.length - 1) * chart.area.w; const label = String(labels[i] ?? i + 1); chart.ctx.fillText(label.length > 13 ? `${label.slice(0, 12)}…` : label, Math.min(x, chart.width - 75), chart.height - 10); });
+  chart.ctx.fillText('TIME →', chart.width - 52, chart.height - 1);
+}
+
+function drawEnsemble() {
+  const empty = $('ensembleEmpty');
+  if (!state.results.ensemble) { empty.classList.remove('hidden'); const fit = fitCanvas($('ensembleChart')); if (fit) fit.ctx.clearRect(0, 0, fit.width, fit.height); return; }
+  empty.classList.add('hidden'); const actual = state.results.actual, ensemble = state.results.ensemble;
+  const chart = chartBase($('ensembleChart'), [actual, ensemble]); if (!chart) return; line(chart.ctx, actual, chart, colors.Actual, 0, actual.length, 3); line(chart.ctx, ensemble, chart, colors.Ensemble, 0, actual.length, 3); legend(chart.ctx, [{ name: 'Actual', color: colors.Actual }, { name: 'Equal-average ensemble', color: colors.Ensemble }], chart.width, 9); drawTimeAxis(chart, state.labels.slice(state.results.split));
+}
+
+function drawResults() {
+  if (!state.results) return;
+  drawPerformance(); drawForecasts(); drawEnsemble();
+  const best = [...state.results.results].sort((a, b) => a.rmse - b.rmse)[0];
+  $('resultSummary').textContent = `${state.results.results.length} models · ${state.results.actual.length} test observations · best RMSE: ${best.name}`;
+  $('metricsStrip').innerHTML = state.results.results.map(r => `<div class="metric-pill"><b>${r.name}</b><span>RMSE ${compact(r.rmse)} · CORR ${r.correlation.toFixed(3)}</span></div>`).join('') + (state.results.ensemble_metrics ? `<div class="metric-pill"><b>ENSEMBLE</b><span>RMSE ${compact(state.results.ensemble_metrics.rmse)} · CORR ${state.results.ensemble_metrics.correlation.toFixed(3)}</span></div>` : '');
+}
+
+function initSpace() {
+  const canvas = $('space'), ctx = canvas.getContext('2d');
+  function resize() { canvas.width = innerWidth * Math.min(devicePixelRatio, 1.5); canvas.height = innerHeight * Math.min(devicePixelRatio, 1.5); ctx.setTransform(canvas.width / innerWidth, 0, 0, canvas.height / innerHeight, 0, 0); state.particles = Array.from({ length: Math.min(260, Math.floor(innerWidth / 5)) }, () => ({ x: Math.random() * innerWidth, y: Math.random() * innerHeight, z: Math.random(), r: Math.random() * 1.5 + .2, vx: (Math.random() - .5) * .09, vy: Math.random() * .12 + .02 })); }
+  function glow(x, y, radius, stops) { const g = ctx.createRadialGradient(x, y, 0, x, y, radius); stops.forEach(s => g.addColorStop(s[0], s[1])); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill(); }
+  function frame(time) {
+    ctx.clearRect(0, 0, innerWidth, innerHeight); ctx.fillStyle = '#02040b'; ctx.fillRect(0, 0, innerWidth, innerHeight);
+    state.particles.forEach((p, i) => { p.x += p.vx + state.mouse.x * p.z * .02; p.y += p.vy; if (p.y > innerHeight + 5) p.y = -5; if (p.x < -5) p.x = innerWidth + 5; if (p.x > innerWidth + 5) p.x = -5; ctx.globalAlpha = .25 + p.z * .7; ctx.fillStyle = i % 17 ? '#bdeaff' : '#b66dff'; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (.4 + p.z), 0, Math.PI * 2); ctx.fill(); }); ctx.globalAlpha = 1;
+    if (state.step === 1) { for (let i = 0; i < 9; i += 1) { const x = (i * 241 + time * .012 * (i % 3 + 1)) % (innerWidth + 150) - 75, y = (i * 137) % innerHeight; ctx.fillStyle = 'rgba(78,86,106,.32)'; ctx.beginPath(); for (let k = 0; k < 8; k += 1) { const a = k / 8 * Math.PI * 2, r = 8 + (i % 4) * 4 + Math.sin(k * 7 + i) * 4; ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); } ctx.fill(); } }
+    if (state.step === 2) { glow(innerWidth * .16, innerHeight * .37, 125, [[0,'rgba(255,243,190,.95)'],[.08,'rgba(255,130,50,.75)'],[.35,'rgba(255,76,30,.15)'],[1,'transparent']]); glow(innerWidth * .83, innerHeight * .28, 155, [[0,'rgba(235,250,255,.95)'],[.06,'rgba(90,180,255,.8)'],[.4,'rgba(40,91,255,.12)'],[1,'transparent']]); }
+    if (state.step === 3) { const cx = innerWidth * .5, cy = innerHeight * .47; ctx.save(); ctx.translate(cx, cy); ctx.rotate(-.08); const g = ctx.createRadialGradient(0,0,55,0,0,250); g.addColorStop(0,'#000'); g.addColorStop(.22,'#000'); g.addColorStop(.25,'rgba(255,240,210,.9)'); g.addColorStop(.3,'rgba(255,90,35,.65)'); g.addColorStop(.48,'rgba(149,54,255,.2)'); g.addColorStop(1,'transparent'); ctx.scale(1,.26); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,250,0,Math.PI*2); ctx.fill(); ctx.restore(); glow(cx,cy,75,[[0,'#000'],[.85,'#000'],[1,'rgba(77,156,255,.3)']]); }
+    requestAnimationFrame(frame);
+  }
+  addEventListener('resize', resize); resize(); requestAnimationFrame(frame);
+}
+
+document.querySelectorAll('[data-go]').forEach(btn => btn.addEventListener('click', () => navigate(Number(btn.dataset.go))));
+$('fileInput').addEventListener('change', (event) => uploadFile(event.target.files[0]));
+['dragenter', 'dragover'].forEach(name => $('uploadZone').addEventListener(name, e => { e.preventDefault(); $('uploadZone').classList.add('drag'); }));
+['dragleave', 'drop'].forEach(name => $('uploadZone').addEventListener(name, e => { e.preventDefault(); $('uploadZone').classList.remove('drag'); }));
+$('uploadZone').addEventListener('drop', e => uploadFile(e.dataTransfer.files[0]));
+$('demoData').addEventListener('click', demoDataset); $('targetColumn').addEventListener('change', updateSeries); $('timeColumn').addEventListener('change', updateSeries); $('trainPct').addEventListener('input', updatePartition); $('frequency').addEventListener('change', () => { updatePartition(); if (!$('decompositionPanel').classList.contains('hidden')) drawDecomposition(); });
+$('decomposeBtn').addEventListener('click', () => { $('decompositionPanel').classList.remove('hidden'); requestAnimationFrame(drawDecomposition); $('decompositionPanel').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+$('closeDecomp').addEventListener('click', () => $('decompositionPanel').classList.add('hidden')); $('proceedBtn').addEventListener('click', () => navigate(2)); $('runModels').addEventListener('click', runModels);
+$('selectAll').addEventListener('click', () => { const boxes = [...document.querySelectorAll('input[name=model]')], all = boxes.every(b => b.checked); boxes.forEach(b => { b.checked = !all; }); $('selectAll').textContent = all ? 'Select all' : 'Clear all'; });
+[['nnetP','pOut',v=>v],['nnetSP','POut',v=>v],['nnetSize','sizeOut',v=>v],['nnetRepeats','repeatsOut',v=>v],['nnetLambda','lambdaOut',v=>(10 ** Number(v)).toPrecision(1)]].forEach(([id,out,format]) => $(id).addEventListener('input', () => $(out).textContent = format($(id).value)));
+addEventListener('pointermove', e => { state.mouse.x = e.clientX - innerWidth / 2; state.mouse.y = e.clientY - innerHeight / 2; });
+addEventListener('resize', () => { clearTimeout(state.resizeTimer); state.resizeTimer = setTimeout(() => { if (state.step === 1) updatePartition(); if (state.step === 3) drawResults(); if (!$('decompositionPanel').classList.contains('hidden')) drawDecomposition(); }, 120); });
+initSpace();
