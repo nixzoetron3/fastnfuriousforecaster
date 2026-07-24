@@ -6,6 +6,8 @@ FastForecast by NXZ is a local and deployable three-stage forecasting web agent 
 2. **Model Bay** — configure and run SES, Holt, Holt-Winters, ARIMA, ETS, and NNETAR engines. In multivariate mode, ARIMA and NNETAR consume selected exogenous regressors.
 3. **Orbital Results** — compare RMSE and test correlation, inspect forecast trajectories, and evaluate the equal-average ARIMA/ETS/NNETAR ensemble.
 
+The Data Dock also includes a glowing fresh-start launcher, a target/xreg live signal view, an ACF/PACF seasonality cycle scanner, and interactive train/test partitioning. The model launch button uses a shotgun-style sound cue, while other controls use a lighter modern click sound.
+
 ## Launch
 
 From the AFIP workspace in PowerShell:

@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const state = { step: 1, rows: [], columns: [], numeric: [], series: [], seriesRows: [], labels: [], results: null, selectedXregs: [], particles: [], mouse: { x: 0, y: 0 } };
+const state = { step: 1, rows: [], columns: [], numeric: [], series: [], seriesRows: [], labels: [], results: null, selectedXregs: [], particles: [], mouse: { x: 0, y: 0 }, audioContext: null };
 const colors = { Actual: '#f4fbff', SES: '#6dff9d', Holt: '#ffca55', 'Holt-Winters': '#ff7c65', ARIMA: '#57e9ff', ETS: '#b56bff', NNETAR: '#ff62c6', Ensemble: '#72ffb2' };
 const DEMO_FILES = {
   weekly: { path: './demo/ducatidemandweekly.csv', name: 'Ducati Panigale weekly demand', target: 'Ducati_Demand(*1000 units)', time: 'Date', frequency: '52' },
@@ -16,6 +16,66 @@ function toast(message) {
 function safeNumber(value) {
   const n = Number(String(value ?? '').replaceAll(',', '').trim());
   return Number.isFinite(n) ? n : null;
+}
+
+function audioContext() {
+  const Audio = window.AudioContext || window.webkitAudioContext;
+  if (!Audio) return null;
+  if (!state.audioContext) state.audioContext = new Audio();
+  return state.audioContext;
+}
+
+function playModernClickSound() {
+  try {
+    const ac = audioContext(); if (!ac) return;
+    const now = ac.currentTime;
+    const gain = ac.createGain(); gain.connect(ac.destination);
+    gain.gain.setValueAtTime(.001, now);
+    gain.gain.exponentialRampToValueAtTime(.055, now + .01);
+    gain.gain.exponentialRampToValueAtTime(.001, now + .105);
+    const ping = ac.createOscillator(); ping.type = 'triangle';
+    ping.frequency.setValueAtTime(1120, now);
+    ping.frequency.exponentialRampToValueAtTime(720, now + .08);
+    ping.connect(gain); ping.start(now); ping.stop(now + .12);
+  } catch (_) { /* Cosmetic click sound can fail silently. */ }
+}
+
+function playShotgunSound() {
+  try {
+    const ac = audioContext(); if (!ac) return;
+    const now = ac.currentTime;
+    const master = ac.createGain(); master.connect(ac.destination);
+    master.gain.setValueAtTime(.001, now);
+    master.gain.exponentialRampToValueAtTime(.48, now + .012);
+    master.gain.exponentialRampToValueAtTime(.07, now + .16);
+    master.gain.exponentialRampToValueAtTime(.001, now + .72);
+
+    const boom = ac.createOscillator(); boom.type = 'sine';
+    boom.frequency.setValueAtTime(95, now);
+    boom.frequency.exponentialRampToValueAtTime(34, now + .22);
+    boom.connect(master); boom.start(now); boom.stop(now + .32);
+
+    const crackBuffer = ac.createBuffer(1, Math.floor(ac.sampleRate * .46), ac.sampleRate);
+    const crackData = crackBuffer.getChannelData(0);
+    for (let i = 0; i < crackData.length; i += 1) {
+      const t = i / crackData.length;
+      crackData[i] = (Math.random() * 2 - 1) * Math.exp(-t * 10.5);
+    }
+    const crack = ac.createBufferSource(); crack.buffer = crackBuffer;
+    const highpass = ac.createBiquadFilter(); highpass.type = 'highpass'; highpass.frequency.value = 680;
+    const lowpass = ac.createBiquadFilter(); lowpass.type = 'lowpass'; lowpass.frequency.value = 4800;
+    crack.connect(highpass); highpass.connect(lowpass); lowpass.connect(master); crack.start(now);
+
+    const tailBuffer = ac.createBuffer(1, Math.floor(ac.sampleRate * .62), ac.sampleRate);
+    const tailData = tailBuffer.getChannelData(0);
+    for (let i = 0; i < tailData.length; i += 1) {
+      const t = i / tailData.length;
+      tailData[i] = (Math.random() * 2 - 1) * Math.exp(-t * 4.2) * .36;
+    }
+    const tail = ac.createBufferSource(); tail.buffer = tailBuffer;
+    const tailFilter = ac.createBiquadFilter(); tailFilter.type = 'lowpass'; tailFilter.frequency.value = 950;
+    tail.connect(tailFilter); tailFilter.connect(master); tail.start(now + .055);
+  } catch (_) { /* Cosmetic shotgun sound can fail silently. */ }
 }
 
 function openMissionGate() {
@@ -106,6 +166,7 @@ function loadDataset(payload, options = {}) {
   $('datasetMeta').textContent = `${payload.row_count.toLocaleString()} observations received · ${state.columns.length} columns · ${state.numeric.length} numeric signals`;
   $('decomposeBtn').disabled = !state.numeric.length;
   $('proceedBtn').disabled = !state.numeric.length;
+  $('suggestSeasonalityBtn').disabled = !state.numeric.length;
   if (options.autoSelectXregs) state.selectedXregs = state.numeric.filter((name) => name !== target.value && name !== time.value);
   renderXregPanel();
   updateSeries();
@@ -159,6 +220,57 @@ function renderXregPanel() {
   document.querySelectorAll('input[data-xreg]').forEach((input) => input.addEventListener('change', () => { state.selectedXregs = selectedXregs(); }));
 }
 
+function xregPlotCandidates() {
+  const target = $('targetColumn').value;
+  const time = $('timeColumn').value;
+  return state.numeric.filter((name) => name !== target && name !== time);
+}
+
+function updateXregPlotOptions() {
+  const select = $('xregPlotColumn');
+  const previous = select.value;
+  const candidates = xregPlotCandidates();
+  select.innerHTML = candidates.length
+    ? candidates.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')
+    : '<option>No xreg candidates</option>';
+  select.disabled = !candidates.length;
+  if (candidates.includes(previous)) select.value = previous;
+  $('xregEmpty').classList.toggle('hidden', Boolean(candidates.length && state.seriesRows.length));
+  drawXregChart();
+}
+
+function drawXregChart(split = null) {
+  const select = $('xregPlotColumn');
+  if (!state.seriesRows.length || select.disabled || !select.value) {
+    const fit = fitCanvas($('xregChart'));
+    if (fit) fit.ctx.clearRect(0, 0, fit.width, fit.height);
+    $('xregTitle').textContent = 'Exogenous variable partition';
+    $('xregEmpty').classList.remove('hidden');
+    return;
+  }
+  const name = select.value;
+  const values = state.seriesRows.map((row) => safeNumber(row[name]));
+  const usable = values.filter((value) => value !== null);
+  if (!usable.length) {
+    $('xregEmpty').classList.remove('hidden');
+    return;
+  }
+  $('xregTitle').textContent = name;
+  $('xregEmpty').classList.add('hidden');
+  const partition = split ?? Math.max(1, Math.min(values.length - 1, Math.round(values.length * Number($('trainPct').value) / 100)));
+  const chart = chartBase($('xregChart'), [values.map((value) => value ?? NaN)]);
+  if (!chart) return;
+  const train = values.map((value, i) => i < partition ? value ?? NaN : NaN);
+  const test = values.map((value, i) => i >= partition - 1 ? value ?? NaN : NaN);
+  line(chart.ctx, train, chart, colors.Ensemble, 0, values.length, 2.7);
+  line(chart.ctx, test, chart, colors.ETS, partition - 1, values.length, 2.7);
+  const x = chart.area.x + ((partition - .5) / Math.max(1, values.length - 1)) * chart.area.w;
+  chart.ctx.strokeStyle = 'rgba(255,255,255,.28)';
+  chart.ctx.setLineDash([3, 5]);
+  chart.ctx.beginPath(); chart.ctx.moveTo(x, chart.area.y); chart.ctx.lineTo(x, chart.area.y + chart.area.h); chart.ctx.stroke(); chart.ctx.setLineDash([]);
+  drawTimeAxis(chart, state.labels);
+}
+
 function updateSeries() {
   if (!state.rows.length || !$('targetColumn').value) return;
   const target = $('targetColumn').value;
@@ -169,8 +281,11 @@ function updateSeries() {
   state.labels = pairs.map((item) => String(item.label ?? ''));
   $('seriesTitle').textContent = target;
   $('seriesEmpty').classList.toggle('hidden', state.series.length > 0);
+  $('suggestSeasonalityBtn').disabled = state.series.length < 12;
+  updateXregPlotOptions();
   updatePartition();
   if (!$('decompositionPanel').classList.contains('hidden')) drawDecomposition();
+  if (!$('seasonalityPanel').classList.contains('hidden')) suggestSeasonality();
 }
 
 function updatePartition() {
@@ -181,6 +296,7 @@ function updatePartition() {
   $('testCount').textContent = state.series.length ? state.series.length - split : '—';
   $('freqReadout').textContent = $('frequency').value;
   drawSeriesChart(split);
+  drawXregChart(split);
 }
 
 function fitCanvas(canvas) {
@@ -269,6 +385,156 @@ function drawDecomposition() {
   drawMini($('decompObserved'), observed, colors.Actual); drawMini($('decompTrend'), trend, colors.ARIMA); drawMini($('decompSeasonal'), seasonal, colors.ETS); drawMini($('decompRemainder'), remainder, colors['Holt-Winters']);
 }
 
+function autocorrelation(values, maxLag) {
+  const clean = values.filter(Number.isFinite);
+  const mean = clean.reduce((sum, value) => sum + value, 0) / Math.max(1, clean.length);
+  const centered = clean.map((value) => value - mean);
+  const denom = centered.reduce((sum, value) => sum + value * value, 0) || 1;
+  return Array.from({ length: maxLag }, (_, index) => {
+    const lag = index + 1;
+    let sum = 0;
+    for (let i = lag; i < centered.length; i += 1) sum += centered[i] * centered[i - lag];
+    return sum / denom;
+  });
+}
+
+function solveLinearSystem(matrix, vector) {
+  const n = vector.length;
+  const a = matrix.map((row, i) => [...row, vector[i]]);
+  for (let col = 0; col < n; col += 1) {
+    let pivot = col;
+    for (let row = col + 1; row < n; row += 1) if (Math.abs(a[row][col]) > Math.abs(a[pivot][col])) pivot = row;
+    if (Math.abs(a[pivot][col]) < 1e-10) return null;
+    [a[col], a[pivot]] = [a[pivot], a[col]];
+    const scale = a[col][col];
+    for (let j = col; j <= n; j += 1) a[col][j] /= scale;
+    for (let row = 0; row < n; row += 1) {
+      if (row === col) continue;
+      const factor = a[row][col];
+      for (let j = col; j <= n; j += 1) a[row][j] -= factor * a[col][j];
+    }
+  }
+  return a.map((row) => row[n]);
+}
+
+function partialAutocorrelation(values, maxLag) {
+  const clean = values.filter(Number.isFinite);
+  const mean = clean.reduce((sum, value) => sum + value, 0) / Math.max(1, clean.length);
+  const centered = clean.map((value) => value - mean);
+  return Array.from({ length: maxLag }, (_, index) => {
+    const lag = index + 1;
+    const rows = [];
+    const target = [];
+    for (let t = lag; t < centered.length; t += 1) {
+      rows.push(Array.from({ length: lag }, (_, j) => centered[t - j - 1]));
+      target.push(centered[t]);
+    }
+    if (rows.length <= lag + 1) return 0;
+    const xtx = Array.from({ length: lag }, () => Array(lag).fill(0));
+    const xty = Array(lag).fill(0);
+    rows.forEach((row, i) => {
+      row.forEach((value, r) => {
+        xty[r] += value * target[i];
+        row.forEach((other, c) => { xtx[r][c] += value * other; });
+      });
+    });
+    for (let i = 0; i < lag; i += 1) xtx[i][i] += 1e-6;
+    const coef = solveLinearSystem(xtx, xty);
+    return coef ? Math.max(-1, Math.min(1, coef[lag - 1])) : 0;
+  });
+}
+
+function recommendCycles(acf, pacf, sampleSize) {
+  const significance = 1.96 / Math.sqrt(Math.max(1, sampleSize));
+  const scored = [];
+  for (let lag = 2; lag <= acf.length; lag += 1) {
+    const a = acf[lag - 1] || 0;
+    const p = pacf[lag - 1] || 0;
+    const prev = acf[lag - 2] || 0;
+    const next = acf[lag] || 0;
+    const localPeak = a > prev && a >= next ? .22 : 0;
+    const harmonic = lag * 2 <= acf.length ? Math.max(0, acf[lag * 2 - 1]) * .18 : 0;
+    const score = Math.max(0, a) * 1.35 + Math.abs(p) * .55 + localPeak + harmonic + (a > significance ? .2 : 0) + (Math.abs(p) > significance ? .1 : 0);
+    if (score > .04) scored.push({ lag, acf: a, pacf: p, score, significant: a > significance || Math.abs(p) > significance });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const chosen = [];
+  for (const candidate of scored) {
+    const tooClose = chosen.some((item) => Math.abs(item.lag - candidate.lag) <= Math.max(1, Math.round(candidate.lag * .08)));
+    if (!tooClose) chosen.push(candidate);
+    if (chosen.length === 3) break;
+  }
+  return chosen;
+}
+
+function drawCorrelationBars(canvas, values, sampleSize, color, title) {
+  const fit = fitCanvas(canvas); if (!fit) return;
+  const { ctx, width, height } = fit;
+  const area = { x: 46, y: 20, w: width - 62, h: height - 52 };
+  const confidence = 1.96 / Math.sqrt(Math.max(1, sampleSize));
+  ctx.clearRect(0, 0, width, height);
+  ctx.font = '8px Space Mono'; ctx.fillStyle = '#6f899c';
+  ctx.fillText(title, 6, 11);
+  ctx.strokeStyle = 'rgba(100,190,225,.13)';
+  for (let i = 0; i <= 4; i += 1) {
+    const y = area.y + area.h * i / 4;
+    ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
+  }
+  const yOf = (value) => area.y + (1 - (value + 1) / 2) * area.h;
+  const zero = yOf(0);
+  ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.beginPath(); ctx.moveTo(area.x, zero); ctx.lineTo(area.x + area.w, zero); ctx.stroke();
+  ctx.strokeStyle = 'rgba(109,255,157,.42)'; ctx.setLineDash([4, 5]);
+  [confidence, -confidence].forEach((band) => { const y = yOf(band); ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke(); });
+  ctx.setLineDash([]);
+  const barWidth = Math.max(2, area.w / Math.max(1, values.length) * .56);
+  values.forEach((value, index) => {
+    const x = area.x + (index + .5) / values.length * area.w;
+    const y = yOf(value);
+    ctx.strokeStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = Math.abs(value) > confidence ? 10 : 0;
+    ctx.lineWidth = barWidth;
+    ctx.beginPath(); ctx.moveTo(x, zero); ctx.lineTo(x, y); ctx.stroke();
+  });
+  ctx.shadowBlur = 0; ctx.lineWidth = 1;
+  ctx.fillStyle = '#6f899c';
+  ctx.fillText('+1', 10, area.y + 4); ctx.fillText('0', 16, zero + 3); ctx.fillText('-1', 10, area.y + area.h);
+  ctx.fillText('LAG →', width - 48, height - 7);
+}
+
+function setFrequencyValue(cycle) {
+  const value = String(cycle);
+  const select = $('frequency');
+  if (![...select.options].some((option) => option.value === value)) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = `${value} · Suggested cycle`;
+    select.appendChild(option);
+  }
+  select.value = value;
+}
+
+function suggestSeasonality() {
+  if (state.series.length < 12) { toast('Load at least 12 observations before scanning cycle length.'); return; }
+  const maxLag = Math.min(80, Math.max(2, Math.floor(state.series.length / 2) - 1));
+  const acf = autocorrelation(state.series, maxLag);
+  const pacf = partialAutocorrelation(state.series, maxLag);
+  const recommendations = recommendCycles(acf, pacf, state.series.length);
+  drawCorrelationBars($('acfChart'), acf, state.series.length, colors.ARIMA, 'ACF');
+  drawCorrelationBars($('pacfChart'), pacf, state.series.length, colors.ETS, 'PACF');
+  $('seasonalityRecommendations').innerHTML = recommendations.length
+    ? recommendations.map((item, index) => `<button type="button" data-cycle="${item.lag}"><b>#${index + 1} · ${item.lag}</b><span>ACF ${item.acf.toFixed(3)} · PACF ${item.pacf.toFixed(3)} · score ${item.score.toFixed(2)}</span></button>`).join('')
+    : '<div class="recommendation-empty">No strong cycle peak found. Keep frequency at 1 or use domain knowledge.</div>';
+  document.querySelectorAll('[data-cycle]').forEach((button) => button.addEventListener('click', () => {
+    setFrequencyValue(button.dataset.cycle);
+    updatePartition();
+    if (!$('decompositionPanel').classList.contains('hidden')) drawDecomposition();
+    toast(`Seasonality frequency set to ${button.dataset.cycle}.`);
+  }));
+  $('seasonalityPanel').classList.remove('hidden');
+  $('seasonalityPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function navigate(step) {
   if (step > 1 && !state.series.length) { toast('Load a numeric time series before leaving the data dock.'); return; }
   if (step > 1 && isMultivariate() && !selectedXregs().length) { toast('Tick at least one numeric xreg before leaving the data dock.'); return; }
@@ -279,16 +545,6 @@ function navigate(step) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (step === 1) requestAnimationFrame(updatePartition);
   if (step === 3) requestAnimationFrame(drawResults);
-}
-
-function playLaunchSound() {
-  try {
-    const Audio = window.AudioContext || window.webkitAudioContext; const ac = new Audio(); const now = ac.currentTime;
-    const gain = ac.createGain(); gain.connect(ac.destination); gain.gain.setValueAtTime(.001, now); gain.gain.exponentialRampToValueAtTime(.22, now + .12); gain.gain.exponentialRampToValueAtTime(.001, now + 1.45);
-    const osc = ac.createOscillator(); osc.type = 'sawtooth'; osc.frequency.setValueAtTime(55, now); osc.frequency.exponentialRampToValueAtTime(420, now + 1.2); osc.connect(gain); osc.start(now); osc.stop(now + 1.5);
-    const buffer = ac.createBuffer(1, ac.sampleRate * 1.3, ac.sampleRate); const data = buffer.getChannelData(0); for (let i = 0; i < data.length; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
-    const noise = ac.createBufferSource(); const filter = ac.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.setValueAtTime(180, now); filter.frequency.exponentialRampToValueAtTime(1700, now + 1); noise.buffer = buffer; noise.connect(filter); filter.connect(gain); noise.start(now);
-  } catch (_) { /* Audio is cosmetic. */ }
 }
 
 function buildXregPayload() {
@@ -305,7 +561,7 @@ function buildXregPayload() {
 async function runModels() {
   const models = [...document.querySelectorAll('input[name=model]:checked')].map((input) => input.value);
   if (!models.length) { toast('Select at least one forecast engine.'); return; }
-  playLaunchSound(); $('loading').classList.remove('hidden');
+  playShotgunSound(); $('loading').classList.remove('hidden');
   setTimeout(() => { $('loadingText').textContent = 'Synchronizing model trajectories…'; }, 450);
   try {
     const xreg = buildXregPayload();
@@ -405,19 +661,33 @@ function resetMission() {
   $('seriesTitle').textContent = 'Train / test partition';
   $('seriesEmpty').classList.remove('hidden');
   $('decompositionPanel').classList.add('hidden');
+  $('seasonalityPanel').classList.add('hidden');
   $('xregPanel').classList.add('hidden');
   $('xregList').innerHTML = '';
+  $('xregPlotColumn').innerHTML = '<option>No xreg candidates</option>';
+  $('xregPlotColumn').disabled = true;
+  $('xregTitle').textContent = 'Exogenous variable partition';
+  $('xregEmpty').classList.remove('hidden');
   $('decomposeBtn').disabled = true;
+  $('suggestSeasonalityBtn').disabled = true;
   $('proceedBtn').disabled = true;
   $('resultSummary').textContent = 'Awaiting model launch';
   $('metricsStrip').innerHTML = '';
   $('trainCount').textContent = '—';
   $('testCount').textContent = '—';
   $('freqReadout').textContent = '12';
-  ['seriesChart', 'performanceChart', 'forecastChart', 'ensembleChart', 'decompObserved', 'decompTrend', 'decompSeasonal', 'decompRemainder'].forEach(clearCanvasById);
+  $('seasonalityRecommendations').innerHTML = '';
+  ['seriesChart', 'xregChart', 'acfChart', 'pacfChart', 'performanceChart', 'forecastChart', 'ensembleChart', 'decompObserved', 'decompTrend', 'decompSeasonal', 'decompRemainder'].forEach(clearCanvasById);
   navigate(1);
   openMissionGate();
 }
+
+document.addEventListener('pointerdown', (event) => {
+  const actionable = event.target.closest('button,select,.upload-zone,.model-cards label,.xreg-list label,.switch');
+  if (!actionable || actionable.closest('#runModels')) return;
+  if ((actionable.tagName === 'BUTTON' || actionable.tagName === 'SELECT') && actionable.disabled) return;
+  playModernClickSound();
+}, true);
 
 document.querySelectorAll('[data-go]').forEach(btn => btn.addEventListener('click', () => navigate(Number(btn.dataset.go))));
 $('fileInput').addEventListener('change', (event) => uploadFile(event.target.files[0]));
@@ -425,6 +695,7 @@ $('fileInput').addEventListener('change', (event) => uploadFile(event.target.fil
 ['dragleave', 'drop'].forEach(name => $('uploadZone').addEventListener(name, e => { e.preventDefault(); $('uploadZone').classList.remove('drag'); }));
 $('uploadZone').addEventListener('drop', e => uploadFile(e.dataTransfer.files[0]));
 $('demoData').addEventListener('click', openMissionGate);
+$('startAfreshBtn').addEventListener('click', resetMission);
 document.querySelectorAll('[data-start]').forEach((button) => button.addEventListener('click', () => {
   const choice = button.dataset.start;
   if (choice === 'upload') {
@@ -441,7 +712,10 @@ $('forecastMode').addEventListener('change', () => {
   renderXregPanel();
 });
 $('trainPct').addEventListener('input', updatePartition); $('frequency').addEventListener('change', () => { updatePartition(); if (!$('decompositionPanel').classList.contains('hidden')) drawDecomposition(); });
+$('xregPlotColumn').addEventListener('change', () => drawXregChart());
+$('suggestSeasonalityBtn').addEventListener('click', suggestSeasonality);
 $('decomposeBtn').addEventListener('click', () => { $('decompositionPanel').classList.remove('hidden'); requestAnimationFrame(drawDecomposition); $('decompositionPanel').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+$('closeSeasonality').addEventListener('click', () => $('seasonalityPanel').classList.add('hidden'));
 $('closeDecomp').addEventListener('click', () => $('decompositionPanel').classList.add('hidden')); $('proceedBtn').addEventListener('click', () => navigate(2)); $('runModels').addEventListener('click', runModels);
 $('newMissionBtn').addEventListener('click', resetMission);
 $('selectAll').addEventListener('click', () => { const boxes = [...document.querySelectorAll('input[name=model]')], all = boxes.every(b => b.checked); boxes.forEach(b => { b.checked = !all; }); $('selectAll').textContent = all ? 'Select all' : 'Clear all'; });

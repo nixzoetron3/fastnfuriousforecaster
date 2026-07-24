@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FastForecast by NXZ</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="./styles.css?v=2">
+  <link rel="stylesheet" href="./styles.css?v=3">
 </head>
 <body data-step="1">
   <canvas id="space" aria-hidden="true"></canvas>
@@ -70,7 +70,7 @@
     <section class="page active" id="step1" aria-labelledby="step1Title">
       <div class="page-heading">
         <div><span class="eyebrow">MISSION 01 · RANDOM ASTEROID BELT</span><h1 id="step1Title">Prime the FastForecast engines.</h1></div>
-        <div class="mission-chip">INPUT / CALIBRATION</div>
+        <button class="fresh-button" id="startAfreshBtn" type="button">Click Here to Start Afresh</button>
       </div>
 
       <div class="split-layout">
@@ -87,6 +87,11 @@
 
           <div class="field-stack">
             <label><span>Forecast target column</span><select id="targetColumn" disabled><option>Awaiting dataset…</option></select></label>
+            <div class="partition-control">
+              <div><span>Training data partition</span><output id="trainOut">80%</output></div>
+              <input id="trainPct" type="range" min="55" max="90" value="80">
+              <div class="range-ends"><span>55%</span><span>90%</span></div>
+            </div>
             <label><span>Forecasting mode</span>
               <select id="forecastMode" disabled>
                 <option value="univariate">Univariate forecast</option>
@@ -107,11 +112,6 @@
             </label>
           </div>
 
-          <div class="partition-control">
-            <div><span>Training data partition</span><output id="trainOut">80%</output></div>
-            <input id="trainPct" type="range" min="55" max="90" value="80">
-            <div class="range-ends"><span>55%</span><span>90%</span></div>
-          </div>
           <div class="dataset-meta" id="datasetMeta">Attach data to initialize the signal array.</div>
         </section>
 
@@ -119,8 +119,29 @@
           <div class="panel-head"><div><span class="panel-kicker">LIVE SIGNAL</span><h2 id="seriesTitle">Train / test partition</h2></div><div class="legend"><span class="train">TRAIN</span><span class="test">TEST</span></div></div>
           <div class="canvas-wrap tall"><canvas id="seriesChart"></canvas><div class="empty-chart" id="seriesEmpty">SELECT A TARGET SIGNAL<br><small>Trajectory appears here</small></div></div>
           <div class="chart-readout"><span>TRAIN <b id="trainCount">—</b></span><span>TEST <b id="testCount">—</b></span><span>FREQ <b id="freqReadout">12</b></span></div>
+
+          <div class="xreg-plot-panel">
+            <div class="panel-head compact-head">
+              <div><span class="panel-kicker">XREG SIGNAL</span><h2 id="xregTitle">Exogenous variable partition</h2></div>
+              <label class="inline-select"><span>Select xreg</span><select id="xregPlotColumn" disabled><option>No xreg candidates</option></select></label>
+            </div>
+            <div class="canvas-wrap xreg-wrap"><canvas id="xregChart"></canvas><div class="empty-chart" id="xregEmpty">SELECT AN XREG VARIABLE<br><small>Exogenous trajectory appears here</small></div></div>
+          </div>
         </section>
       </div>
+
+      <div class="seasonality-row">
+        <button class="mega-button amber suggest" id="suggestSeasonalityBtn" type="button" disabled><small>CYCLE SCANNER</small>SUGGEST SEASONALITY CYCLE LENGTH <span>⌕</span></button>
+      </div>
+
+      <section class="glass seasonality-panel hidden" id="seasonalityPanel">
+        <div class="panel-head"><div><span class="panel-kicker">ACF / PACF CYCLE RADAR</span><h2>Top inferred cycle lengths</h2></div><button class="icon-close" id="closeSeasonality" type="button">×</button></div>
+        <div class="acf-grid">
+          <div><span>ACF</span><canvas id="acfChart"></canvas></div>
+          <div><span>PACF</span><canvas id="pacfChart"></canvas></div>
+        </div>
+        <div class="recommendations" id="seasonalityRecommendations"></div>
+      </section>
 
       <div class="launch-row">
         <button class="mega-button green" id="decomposeBtn" type="button" disabled><small>DIAGNOSTIC ARRAY</small>SHOW DECOMPOSITION <span>⌁</span></button>
@@ -199,6 +220,6 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="loading-overlay hidden" id="loading"><div class="warp-ring"></div><strong>ENGAGING MODEL THRUSTERS</strong><span id="loadingText">Crossing the forecast event horizon…</span></div>
-  <script src="./app.js?v=2"></script>
+  <script src="./app.js?v=3"></script>
 </body>
 </html>
