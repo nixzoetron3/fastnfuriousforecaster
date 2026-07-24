@@ -1,29 +1,14 @@
 # FastForecast by NXZ
-Run:
+Run 
 https://fastnfuriousforecaster.onrender.com/
-FastForecast by NXZ is a local and deployable three-stage forecasting web agent with a neon intergalactic interface:
+
+FastForecast by NXZ is a local and deployable three-stage forecasting web agent:
 
 1. **Data Dock** — upload CSV/XLSX data, select the signal and frequency, inspect a live train/test split, and render a classical decomposition.
 2. **Model Bay** — configure and run SES, Holt, Holt-Winters, ARIMA, ETS, and NNETAR engines. In multivariate mode, ARIMA and NNETAR consume selected exogenous regressors.
 3. **Orbital Results** — compare RMSE and test correlation, inspect forecast trajectories, and evaluate the equal-average ARIMA/ETS/NNETAR ensemble.
 
-The Data Dock also includes a glowing fresh-start launcher, a target/xreg live signal view, an ACF/PACF seasonality cycle scanner, interactive train/test partitioning, and looped background music with a real-time volume slider. The model launch button uses a brief win-fanfare sound cue, while other controls use a micro-switch click sound.
 
-In Orbital Results, model performance points are clickable: selected models become beveled and feed a live weighted forecast combination with optional weight normalization to 1. The selected combination is plotted and marked back in Performance Space with a green/red neon star.
-
-## Launch
-
-From the AFIP workspace in PowerShell:
-
-```powershell
-.\agent_fastfuriosforecaster\run_af3_web.ps1
-```
-
-Then open `http://127.0.0.1:8793/`. The launch selector lets you start from Ducati weekly demo data, Ducati monthly demo data, or your own upload.
-
-FastForecast runs entirely on the local machine when launched this way. The bundled Python runtime supplies NumPy and openpyxl. CSV, XLSX, and XLSM uploads are accepted; legacy XLS files should first be saved as XLSX or CSV.
-
-The opening launch selector can start with bundled Ducati Panigale weekly/monthly demo demand data or let you upload your own temporal dataset.
 
 ## Deploy for beta testing
 
