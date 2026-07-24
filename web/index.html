@@ -218,7 +218,18 @@
       <div class="results-grid">
         <section class="glass result-card performance"><div class="panel-head"><div><span class="panel-kicker">PERFORMANCE SPACE</span><h2>RMSE vs correlation</h2></div><span class="chart-no">01</span></div><div class="canvas-wrap"><canvas id="performanceChart"></canvas></div></section>
         <section class="glass result-card forecast"><div class="panel-head"><div><span class="panel-kicker">TEST HORIZON</span><h2>Actual vs model forecasts</h2></div><span class="chart-no">02</span></div><div class="canvas-wrap"><canvas id="forecastChart"></canvas></div></section>
-        <section class="glass result-card ensemble"><div class="panel-head"><div><span class="panel-kicker">TRI-CORE CONSENSUS</span><h2>ARIMA + ETS + NNETAR ensemble</h2></div><span class="chart-no">03</span></div><div class="canvas-wrap"><canvas id="ensembleChart"></canvas><div class="empty-chart hidden" id="ensembleEmpty">SELECT ARIMA, ETS & NNETAR<br><small>All three are required for the equal-average ensemble</small></div></div></section>
+        <section class="glass result-card ensemble">
+          <div class="panel-head">
+            <div><span class="panel-kicker">TRI-CORE CONSENSUS</span><h2>Weighted selected forecast combination</h2></div><span class="chart-no">03</span>
+          </div>
+          <div class="combo-control-panel">
+            <div class="combo-help">Click model points in Performance Space to activate/deactivate them. Active models become beveled and feed this weighted forecast.</div>
+            <label class="combo-lock"><input id="comboConstrain" type="checkbox" checked><span>Add weights up to 1</span></label>
+            <div class="combo-sliders" id="comboWeightsList"></div>
+            <div class="combo-summary" id="comboSummary">Default: equal-weight ARIMA + NNETAR when available.</div>
+          </div>
+          <div class="canvas-wrap"><canvas id="ensembleChart"></canvas><div class="empty-chart hidden" id="ensembleEmpty">SELECT AT LEAST ONE MODEL POINT<br><small>Weighted combination appears here</small></div></div>
+        </section>
       </div>
       <div class="metrics-strip" id="metricsStrip"></div>
       <div class="page-actions"><button class="back-button" data-go="2" type="button">← PREVIOUS PAGE</button><button class="back-button bright" id="newMissionBtn" type="button">NEW MISSION ↻</button></div>

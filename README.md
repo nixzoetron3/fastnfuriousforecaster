@@ -8,6 +8,8 @@ FastForecast by NXZ is a local and deployable three-stage forecasting web agent 
 
 The Data Dock also includes a glowing fresh-start launcher, a target/xreg live signal view, an ACF/PACF seasonality cycle scanner, interactive train/test partitioning, and looped background music with a real-time volume slider. The model launch button uses a brief win-fanfare sound cue, while other controls use a micro-switch click sound.
 
+In Orbital Results, model performance points are clickable: selected models become beveled and feed a live weighted forecast combination with optional weight normalization to 1. The selected combination is plotted and marked back in Performance Space with a green/red neon star.
+
 ## Launch
 
 From the AFIP workspace in PowerShell:

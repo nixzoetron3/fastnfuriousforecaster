@@ -14,6 +14,10 @@ from openpyxl import load_workbook
 
 WEB_DIR = Path(__file__).resolve().parent
 MAX_ROWS = 10000
+DEMO_FILES = {
+    "weekly": "ducatidemandweekly.csv",
+    "monthly": "ducatidemandmonthly.csv",
+}
 
 
 def respond(handler, status, payload):
@@ -91,6 +95,16 @@ def parse_upload(raw, filename):
     except csv.Error:
         dialect = csv.excel
     return table_payload(csv.reader(io.StringIO(text), dialect), filename)
+
+
+def parse_demo(kind):
+    filename = DEMO_FILES.get(kind)
+    if not filename:
+        raise ValueError("Unknown demo dataset. Choose weekly or monthly.")
+    path = WEB_DIR / "demo" / filename
+    if not path.is_file():
+        raise ValueError(f"Demo dataset is missing from the deployment: {filename}")
+    return parse_upload(path.read_bytes(), filename)
 
 
 def ses(train, horizon):
@@ -363,6 +377,13 @@ class FastForecastHandler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         if path in {"/api/health", "/healthz"}:
             respond(self, 200, {"ok": True, "agent": "FastForecast by NXZ", "codename": "FastForecast"})
+            return
+        if path.startswith("/api/demo/"):
+            try:
+                kind = path.rsplit("/", 1)[-1].strip().lower()
+                respond(self, 200, parse_demo(kind))
+            except Exception as error:
+                respond(self, 400, {"ok": False, "error": str(error)})
             return
         if path == "/favicon.ico":
             self.send_response(204)

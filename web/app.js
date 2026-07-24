@@ -1,9 +1,9 @@
 const $ = (id) => document.getElementById(id);
-const state = { step: 1, rows: [], columns: [], numeric: [], series: [], seriesRows: [], labels: [], results: null, selectedXregs: [], particles: [], mouse: { x: 0, y: 0 }, audioContext: null };
+const state = { step: 1, rows: [], columns: [], numeric: [], series: [], seriesRows: [], labels: [], results: null, selectedXregs: [], comboSelected: [], comboWeights: {}, comboConstrain: true, performanceHitboxes: [], particles: [], mouse: { x: 0, y: 0 }, audioContext: null };
 const colors = { Actual: '#f4fbff', SES: '#6dff9d', Holt: '#ffca55', 'Holt-Winters': '#ff7c65', ARIMA: '#57e9ff', ETS: '#b56bff', NNETAR: '#ff62c6', Ensemble: '#72ffb2' };
 const DEMO_FILES = {
-  weekly: { path: './demo/ducatidemandweekly.csv', name: 'Ducati Panigale weekly demand', target: 'Ducati_Demand(*1000 units)', time: 'Date', frequency: '52' },
-  monthly: { path: './demo/ducatidemandmonthly.csv', name: 'Ducati Panigale monthly demand', target: 'panigale_demand(*100 units)', time: 'date', frequency: '12' },
+  weekly: { name: 'Ducati Panigale weekly demand', target: 'Ducati_Demand(*1000 units)', frequency: '52' },
+  monthly: { name: 'Ducati Panigale monthly demand', target: 'panigale_demand(*100 units)', frequency: '12' },
 };
 
 function toast(message) {
@@ -145,10 +145,7 @@ async function loadDemoFile(kind) {
   if (!demo) return;
   $('fileName').textContent = `Loading ${demo.name}…`;
   try {
-    const fileResponse = await fetch(demo.path, { cache: 'no-store' });
-    if (!fileResponse.ok) throw new Error(`Demo file ${demo.name} could not be loaded.`);
-    const blob = await fileResponse.blob();
-    const response = await fetch('/api/upload', { method: 'POST', headers: { 'X-Filename': demo.path.split('/').pop() }, body: blob });
+    const response = await fetch(`/api/demo/${kind}`, { cache: 'no-store' });
     const payload = await response.json();
     if (!response.ok || !payload.ok) throw new Error(payload.error || 'Demo upload failed.');
     loadDataset(payload, { mode: 'multivariate' });
@@ -160,7 +157,7 @@ async function loadDemoFile(kind) {
     toast(`${demo.name} loaded. Multivariate mode is armed with xreg candidates.`);
   } catch (error) {
     $('fileName').textContent = 'Demo load rejected';
-    toast(error.message);
+    toast(`Demo load rejected: ${error.message}`);
   }
 }
 
@@ -184,6 +181,10 @@ function loadDataset(payload, options = {}) {
   state.numeric = payload.numeric_columns || [];
   state.results = null;
   state.selectedXregs = [];
+  state.comboSelected = [];
+  state.comboWeights = {};
+  state.comboConstrain = true;
+  state.performanceHitboxes = [];
   $('fileName').textContent = `${payload.name} · ${payload.row_count.toLocaleString()} rows${payload.sheet ? ` · ${payload.sheet}` : ''}`;
   const target = $('targetColumn');
   target.innerHTML = state.numeric.length ? state.numeric.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('') : '<option>No numeric columns detected</option>';
@@ -365,6 +366,134 @@ function chartBase(canvas, seriesList, yLabel = '') {
 function compact(value) {
   const abs = Math.abs(value);
   return abs >= 1000000 ? `${(value / 1000000).toFixed(1)}m` : abs >= 1000 ? `${(value / 1000).toFixed(1)}k` : value.toFixed(abs < 10 ? 2 : 1);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, Number(value)));
+}
+
+function clientMetrics(actual, predicted) {
+  const n = Math.min(actual.length, predicted.length);
+  if (!n) return { rmse: 0, correlation: 0 };
+  const a = actual.slice(0, n).map(Number), p = predicted.slice(0, n).map(Number);
+  const rmse = Math.sqrt(a.reduce((sum, value, i) => sum + (value - p[i]) ** 2, 0) / n);
+  const ma = a.reduce((sum, value) => sum + value, 0) / n;
+  const mp = p.reduce((sum, value) => sum + value, 0) / n;
+  let cov = 0, va = 0, vp = 0;
+  for (let i = 0; i < n; i += 1) {
+    const da = a[i] - ma, dp = p[i] - mp;
+    cov += da * dp; va += da * da; vp += dp * dp;
+  }
+  const denom = Math.sqrt(va * vp);
+  const correlation = denom > 1e-9 ? cov / denom : 0;
+  return { rmse, correlation: Number.isFinite(correlation) ? correlation : 0 };
+}
+
+function comboItems() {
+  if (!state.results) return [];
+  const selected = new Set(state.comboSelected);
+  return state.results.results.filter((result) => selected.has(result.name));
+}
+
+function initializeComboSelection(result = state.results) {
+  const results = result?.results || [];
+  const preferred = results.filter((item) => ['NNETAR', 'ARIMA'].includes(item.model || item.name));
+  const selected = preferred.length >= 2 ? preferred : results.slice(0, Math.min(2, results.length));
+  state.comboSelected = selected.map((item) => item.name);
+  state.comboWeights = {};
+  const weight = selected.length ? 1 / selected.length : 0;
+  selected.forEach((item) => { state.comboWeights[item.name] = weight; });
+  state.comboConstrain = true;
+}
+
+function normalizeComboWeights(changedName = null) {
+  const selected = state.comboSelected;
+  if (!selected.length) return;
+  selected.forEach((name) => { state.comboWeights[name] = clamp(state.comboWeights[name] ?? 0, 0, 1); });
+  if (!state.comboConstrain) return;
+  if (selected.length === 1) {
+    state.comboWeights[selected[0]] = 1;
+    return;
+  }
+  if (changedName && selected.includes(changedName)) {
+    const fixed = clamp(state.comboWeights[changedName], 0, 1);
+    const others = selected.filter((name) => name !== changedName);
+    const remainder = 1 - fixed;
+    const otherSum = others.reduce((sum, name) => sum + (state.comboWeights[name] || 0), 0);
+    others.forEach((name) => {
+      state.comboWeights[name] = otherSum > 1e-9 ? (state.comboWeights[name] || 0) / otherSum * remainder : remainder / others.length;
+    });
+    state.comboWeights[changedName] = fixed;
+    return;
+  }
+  const sum = selected.reduce((total, name) => total + (state.comboWeights[name] || 0), 0);
+  if (sum <= 1e-9) selected.forEach((name) => { state.comboWeights[name] = 1 / selected.length; });
+  else selected.forEach((name) => { state.comboWeights[name] = (state.comboWeights[name] || 0) / sum; });
+}
+
+function currentCombo() {
+  if (!state.results) return null;
+  normalizeComboWeights();
+  const items = comboItems();
+  if (!items.length) return null;
+  const horizon = state.results.actual.length;
+  const forecast = Array(horizon).fill(0);
+  let positive = false;
+  items.forEach((item) => {
+    const weight = clamp(state.comboWeights[item.name] ?? 0, 0, 1);
+    if (weight > 0) positive = true;
+    item.forecast.slice(0, horizon).forEach((value, i) => { forecast[i] += weight * Number(value); });
+  });
+  if (!positive) return null;
+  const metrics = clientMetrics(state.results.actual, forecast);
+  return { items, forecast, ...metrics };
+}
+
+function renderComboPanel() {
+  const list = $('comboWeightsList');
+  const constrain = $('comboConstrain');
+  constrain.checked = state.comboConstrain;
+  normalizeComboWeights();
+  const items = comboItems();
+  if (!items.length) {
+    list.innerHTML = '<div class="combo-empty">No active model points. Click a point in Performance Space to build a forecast combination.</div>';
+    $('comboSummary').textContent = 'Combination inactive.';
+    return;
+  }
+  list.innerHTML = items.map((item) => {
+    const weight = clamp(state.comboWeights[item.name] ?? 0, 0, 1);
+    const color = colors[item.model || item.name] || colors.ARIMA;
+    return `<label class="combo-slider" style="--model-color:${color}"><span><b>${escapeHtml(item.name)}</b><output>${weight.toFixed(2)}</output></span><input data-combo-weight="${escapeHtml(item.name)}" type="range" min="0" max="1" step="0.01" value="${weight.toFixed(2)}"></label>`;
+  }).join('');
+  const combo = currentCombo();
+  const sum = items.reduce((total, item) => total + clamp(state.comboWeights[item.name] ?? 0, 0, 1), 0);
+  $('comboSummary').textContent = combo ? `${items.length} active models · weight sum ${sum.toFixed(2)} · combo RMSE ${compact(combo.rmse)} · corr ${combo.correlation.toFixed(3)}` : 'Combination inactive.';
+}
+
+function setComboWeight(name, value) {
+  if (!state.comboSelected.includes(name)) return;
+  state.comboWeights[name] = clamp(value, 0, 1);
+  normalizeComboWeights(name);
+  renderComboPanel();
+  drawPerformance();
+  drawEnsemble();
+  updateMetricsStrip();
+}
+
+function toggleComboModel(name) {
+  const index = state.comboSelected.indexOf(name);
+  if (index >= 0) {
+    state.comboSelected.splice(index, 1);
+    delete state.comboWeights[name];
+  } else {
+    state.comboSelected.push(name);
+    state.comboWeights[name] = state.comboConstrain ? 1 / state.comboSelected.length : .5;
+  }
+  normalizeComboWeights();
+  renderComboPanel();
+  drawPerformance();
+  drawEnsemble();
+  updateMetricsStrip();
 }
 
 function line(ctx, values, chart, color, start = 0, total = values.length, width = 2.2, dash = []) {
@@ -601,7 +730,7 @@ async function runModels() {
     const payload = { series: state.series, mode: isMultivariate() ? 'multivariate' : 'univariate', xreg, train_pct: Number($('trainPct').value), frequency: Number($('frequency').value), models, params: { ets: { error: $('etsError').value, trend: $('etsTrend').value, season: $('etsSeason').value, allow_multiplicative_trend: $('etsAllowMultiplicative').checked, restrict: $('etsRestrict').checked }, nnetar: { p: Number($('nnetP').value), P: Number($('nnetSP').value), size: Number($('nnetSize').value), repeats: Number($('nnetRepeats').value), lambda: 10 ** Number($('nnetLambda').value) } } };
     const response = await fetch('/api/forecast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const result = await response.json(); if (!response.ok || !result.ok) throw new Error(result.error || 'Forecast run failed.');
-    state.results = result; navigate(3);
+    state.results = result; initializeComboSelection(result); navigate(3);
   } catch (error) { toast(error.message); } finally { $('loading').classList.add('hidden'); $('loadingText').textContent = 'Crossing the forecast event horizon…'; }
 }
 
@@ -610,13 +739,70 @@ function legend(ctx, items, width, y = 16) {
   items.forEach((item) => { if (x > width - 95) return; ctx.fillStyle = item.color; ctx.fillRect(x, y, 14, 3); ctx.fillStyle = '#91aabd'; ctx.fillText(item.name, x + 19, y + 4); x += 35 + item.name.length * 6; });
 }
 
+function drawStar(ctx, x, y, radius, points = 5) {
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i += 1) {
+    const angle = -Math.PI / 2 + i * Math.PI / points;
+    const r = i % 2 ? radius * .45 : radius;
+    const px = x + Math.cos(angle) * r;
+    const py = y + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+}
+
+function drawModelPoint(ctx, x, y, color, active) {
+  if (!active) {
+    ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    return;
+  }
+  const bevel = ctx.createRadialGradient(x - 4, y - 5, 1, x, y, 11);
+  bevel.addColorStop(0, '#ffffff');
+  bevel.addColorStop(.22, color);
+  bevel.addColorStop(.74, color);
+  bevel.addColorStop(1, 'rgba(0,0,0,.75)');
+  ctx.shadowColor = color; ctx.shadowBlur = 22;
+  ctx.fillStyle = bevel; ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.68)'; ctx.stroke();
+  ctx.shadowBlur = 0; ctx.lineWidth = 1;
+  ctx.fillStyle = 'rgba(255,255,255,.82)'; ctx.beginPath(); ctx.arc(x - 3.5, y - 4, 2.1, 0, Math.PI * 2); ctx.fill();
+}
+
 function drawPerformance() {
+  if (!state.results) return;
   const results = state.results.results;
   const fit = fitCanvas($('performanceChart')); if (!fit) return; const { ctx, width, height } = fit;
-  const xVals = results.map(r => r.rmse), yVals = results.map(r => r.correlation); const xb = bounds([xVals]), yb = { min: Math.min(-.05, ...yVals) - .05, max: Math.max(.2, ...yVals) + .08 };
+  const combo = currentCombo();
+  const xVals = results.map(r => r.rmse).concat(combo ? [combo.rmse] : []);
+  const yVals = results.map(r => r.correlation).concat(combo ? [combo.correlation] : []);
+  const xb = bounds([xVals]), yb = { min: Math.min(-.05, ...yVals) - .05, max: Math.max(.2, ...yVals) + .08 };
   const area = { x: 58, y: 24, w: width - 82, h: height - 65 }; ctx.clearRect(0, 0, width, height); ctx.font = '8px Space Mono';
+  state.performanceHitboxes = [];
   for (let i = 0; i <= 4; i += 1) { const x = area.x + area.w * i / 4, y = area.y + area.h * i / 4; ctx.strokeStyle = 'rgba(100,190,225,.12)'; ctx.beginPath(); ctx.moveTo(x, area.y); ctx.lineTo(x, area.y + area.h); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke(); ctx.fillStyle = '#698497'; ctx.fillText(compact(xb.min + (xb.max - xb.min) * i / 4), x - 8, height - 20); ctx.fillText((yb.max - (yb.max - yb.min) * i / 4).toFixed(2), 12, y + 3); }
-  results.forEach((r, i) => { const x = area.x + (r.rmse - xb.min) / Math.max(1e-9, xb.max - xb.min) * area.w, y = area.y + (1 - (r.correlation - yb.min) / Math.max(1e-9, yb.max - yb.min)) * area.h; const color = colors[r.model || r.name] || colors.ARIMA; ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 14; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0; ctx.fillStyle = '#d8edf5'; ctx.fillText(r.name, x + 9, y - 7 - (i % 2) * 7); });
+  const selected = new Set(state.comboSelected);
+  results.forEach((r, i) => {
+    const x = area.x + (r.rmse - xb.min) / Math.max(1e-9, xb.max - xb.min) * area.w;
+    const y = area.y + (1 - (r.correlation - yb.min) / Math.max(1e-9, yb.max - yb.min)) * area.h;
+    const color = colors[r.model || r.name] || colors.ARIMA;
+    const active = selected.has(r.name);
+    drawModelPoint(ctx, x, y, color, active);
+    state.performanceHitboxes.push({ name: r.name, x, y, radius: active ? 15 : 12 });
+    ctx.fillStyle = active ? '#eaffff' : '#d8edf5';
+    ctx.fillText(r.name, x + 12, y - 7 - (i % 2) * 7);
+  });
+  if (combo) {
+    const x = area.x + (combo.rmse - xb.min) / Math.max(1e-9, xb.max - xb.min) * area.w;
+    const y = area.y + (1 - (combo.correlation - yb.min) / Math.max(1e-9, yb.max - yb.min)) * area.h;
+    ctx.shadowColor = '#6dff9d'; ctx.shadowBlur = 24;
+    drawStar(ctx, x, y, 13, 5);
+    ctx.fillStyle = '#6dff9d'; ctx.fill();
+    ctx.shadowColor = '#ff315a'; ctx.shadowBlur = 18;
+    ctx.lineWidth = 2.4; ctx.strokeStyle = '#ff315a'; ctx.stroke();
+    ctx.shadowBlur = 0; ctx.lineWidth = 1;
+    ctx.fillStyle = '#d8fff0'; ctx.font = '8px Space Mono'; ctx.fillText('WEIGHTED COMBO', Math.min(x + 16, width - 110), Math.max(y - 12, area.y + 10));
+  }
   ctx.fillStyle = '#7691a4'; ctx.fillText('LOWER RMSE  ←', area.x, height - 4); ctx.fillText('CORRELATION', 4, 11);
 }
 
@@ -635,18 +821,26 @@ function drawTimeAxis(chart, labels) {
 
 function drawEnsemble() {
   const empty = $('ensembleEmpty');
-  if (!state.results.ensemble) { empty.classList.remove('hidden'); const fit = fitCanvas($('ensembleChart')); if (fit) fit.ctx.clearRect(0, 0, fit.width, fit.height); return; }
-  empty.classList.add('hidden'); const actual = state.results.actual, ensemble = state.results.ensemble;
-  const chart = chartBase($('ensembleChart'), [actual, ensemble]); if (!chart) return; line(chart.ctx, actual, chart, colors.Actual, 0, actual.length, 3); line(chart.ctx, ensemble, chart, colors.Ensemble, 0, actual.length, 3); legend(chart.ctx, [{ name: 'Actual', color: colors.Actual }, { name: 'Equal-average ensemble', color: colors.Ensemble }], chart.width, 9); drawTimeAxis(chart, state.labels.slice(state.results.split));
+  const combo = currentCombo();
+  if (!combo) { empty.classList.remove('hidden'); const fit = fitCanvas($('ensembleChart')); if (fit) fit.ctx.clearRect(0, 0, fit.width, fit.height); return; }
+  empty.classList.add('hidden'); const actual = state.results.actual;
+  const chart = chartBase($('ensembleChart'), [actual, combo.forecast]); if (!chart) return; line(chart.ctx, actual, chart, colors.Actual, 0, actual.length, 3); line(chart.ctx, combo.forecast, chart, colors.Ensemble, 0, actual.length, 3); legend(chart.ctx, [{ name: 'Actual', color: colors.Actual }, { name: 'Weighted combination', color: colors.Ensemble }], chart.width, 9); drawTimeAxis(chart, state.labels.slice(state.results.split));
+}
+
+function updateMetricsStrip() {
+  if (!state.results) return;
+  const combo = currentCombo();
+  $('metricsStrip').innerHTML = state.results.results.map(r => `<div class="metric-pill"><b>${r.name}</b><span>RMSE ${compact(r.rmse)} · CORR ${r.correlation.toFixed(3)}</span></div>`).join('') + (combo ? `<div class="metric-pill combo"><b>WEIGHTED COMBO</b><span>RMSE ${compact(combo.rmse)} · CORR ${combo.correlation.toFixed(3)}</span></div>` : '');
 }
 
 function drawResults() {
   if (!state.results) return;
-  drawPerformance(); drawForecasts(); drawEnsemble();
+  renderComboPanel(); drawPerformance(); drawForecasts(); drawEnsemble(); updateMetricsStrip();
   const best = [...state.results.results].sort((a, b) => a.rmse - b.rmse)[0];
+  const combo = currentCombo();
   const modeText = state.results.mode === 'multivariate' ? ` · ${state.results.xreg_columns.length} xregs` : '';
-  $('resultSummary').textContent = `${state.results.results.length} models${modeText} · ${state.results.actual.length} test observations · best RMSE: ${best.name}`;
-  $('metricsStrip').innerHTML = state.results.results.map(r => `<div class="metric-pill"><b>${r.name}</b><span>RMSE ${compact(r.rmse)} · CORR ${r.correlation.toFixed(3)}</span></div>`).join('') + (state.results.ensemble_metrics ? `<div class="metric-pill"><b>ENSEMBLE</b><span>RMSE ${compact(state.results.ensemble_metrics.rmse)} · CORR ${state.results.ensemble_metrics.correlation.toFixed(3)}</span></div>` : '');
+  const comboText = combo ? ` · combo RMSE ${compact(combo.rmse)}` : '';
+  $('resultSummary').textContent = `${state.results.results.length} models${modeText} · ${state.results.actual.length} test observations · best RMSE: ${best.name}${comboText}`;
 }
 
 function initSpace() {
@@ -706,6 +900,9 @@ function resetMission() {
   $('proceedBtn').disabled = true;
   $('resultSummary').textContent = 'Awaiting model launch';
   $('metricsStrip').innerHTML = '';
+  $('comboWeightsList').innerHTML = '';
+  $('comboSummary').textContent = 'Default: equal-weight ARIMA + NNETAR when available.';
+  $('comboConstrain').checked = true;
   $('trainCount').textContent = '—';
   $('testCount').textContent = '—';
   $('freqReadout').textContent = '12';
@@ -753,6 +950,23 @@ $('decomposeBtn').addEventListener('click', () => { $('decompositionPanel').clas
 $('closeSeasonality').addEventListener('click', () => $('seasonalityPanel').classList.add('hidden'));
 $('closeDecomp').addEventListener('click', () => $('decompositionPanel').classList.add('hidden')); $('proceedBtn').addEventListener('click', () => navigate(2)); $('runModels').addEventListener('click', runModels);
 $('newMissionBtn').addEventListener('click', resetMission);
+$('performanceChart').addEventListener('click', (event) => {
+  if (!state.results || !state.performanceHitboxes.length) return;
+  const rect = $('performanceChart').getBoundingClientRect();
+  const x = event.clientX - rect.left, y = event.clientY - rect.top;
+  const hit = state.performanceHitboxes.find((box) => Math.hypot(box.x - x, box.y - y) <= box.radius);
+  if (hit) toggleComboModel(hit.name);
+});
+$('comboConstrain').addEventListener('change', () => {
+  state.comboConstrain = $('comboConstrain').checked;
+  normalizeComboWeights();
+  renderComboPanel(); drawPerformance(); drawEnsemble(); updateMetricsStrip();
+});
+$('comboWeightsList').addEventListener('input', (event) => {
+  const input = event.target.closest('[data-combo-weight]');
+  if (!input) return;
+  setComboWeight(input.dataset.comboWeight, Number(input.value));
+});
 $('selectAll').addEventListener('click', () => { const boxes = [...document.querySelectorAll('input[name=model]')], all = boxes.every(b => b.checked); boxes.forEach(b => { b.checked = !all; }); $('selectAll').textContent = all ? 'Select all' : 'Clear all'; });
 [['nnetP','pOut',v=>v],['nnetSP','POut',v=>v],['nnetSize','sizeOut',v=>v],['nnetRepeats','repeatsOut',v=>v],['nnetLambda','lambdaOut',v=>(10 ** Number(v)).toPrecision(1)]].forEach(([id,out,format]) => $(id).addEventListener('input', () => $(out).textContent = format($(id).value)));
 addEventListener('pointermove', e => { state.mouse.x = e.clientX - innerWidth / 2; state.mouse.y = e.clientY - innerHeight / 2; });
