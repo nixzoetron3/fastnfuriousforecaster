@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const state = { step: 1, rows: [], columns: [], numeric: [], series: [], seriesRows: [], labels: [], results: null, selectedXregs: [], comboSelected: [], comboWeights: {}, comboConstrain: true, performanceHitboxes: [], particles: [], mouse: { x: 0, y: 0 }, audioContext: null };
+const state = { step: 1, rows: [], columns: [], numeric: [], series: [], seriesRows: [], labels: [], results: null, selectedXregs: [], comboSelected: [], comboWeights: {}, comboConstrain: true, comboFrame: 0, performanceHitboxes: [], particles: [], mouse: { x: 0, y: 0 }, audioContext: null };
 const colors = { Actual: '#f4fbff', SES: '#6dff9d', Holt: '#ffca55', 'Holt-Winters': '#ff7c65', ARIMA: '#57e9ff', ETS: '#b56bff', NNETAR: '#ff62c6', Ensemble: '#72ffb2' };
 const DEMO_FILES = {
   weekly: { name: 'Ducati Panigale weekly demand', target: 'Ducati_Demand(*1000 units)', frequency: '52' },
@@ -184,6 +184,7 @@ function loadDataset(payload, options = {}) {
   state.comboSelected = [];
   state.comboWeights = {};
   state.comboConstrain = true;
+  if (state.comboFrame) { cancelAnimationFrame(state.comboFrame); state.comboFrame = 0; }
   state.performanceHitboxes = [];
   $('fileName').textContent = `${payload.name} · ${payload.row_count.toLocaleString()} rows${payload.sheet ? ` · ${payload.sheet}` : ''}`;
   const target = $('targetColumn');
@@ -470,14 +471,50 @@ function renderComboPanel() {
   $('comboSummary').textContent = combo ? `${items.length} active models · weight sum ${sum.toFixed(2)} · combo RMSE ${compact(combo.rmse)} · corr ${combo.correlation.toFixed(3)}` : 'Combination inactive.';
 }
 
+function updateComboPanelValues() {
+  const items = comboItems();
+  if (!items.length) {
+    $('comboSummary').textContent = 'Combination inactive.';
+    return;
+  }
+  const combo = currentCombo();
+  document.querySelectorAll('[data-combo-weight]').forEach((input) => {
+    const name = input.dataset.comboWeight;
+    const display = clamp(state.comboWeights[name] ?? 0, 0, 1).toFixed(2);
+    if (input.value !== display) input.value = display;
+    const output = input.closest('.combo-slider')?.querySelector('output');
+    if (output && output.textContent !== display) output.textContent = display;
+  });
+  const sum = items.reduce((total, item) => total + clamp(state.comboWeights[item.name] ?? 0, 0, 1), 0);
+  $('comboSummary').textContent = combo ? `${items.length} active models · weight sum ${sum.toFixed(2)} · combo RMSE ${compact(combo.rmse)} · corr ${combo.correlation.toFixed(3)}` : 'Combination inactive.';
+}
+
+function updateResultSummary() {
+  if (!state.results) return;
+  const best = [...state.results.results].sort((a, b) => a.rmse - b.rmse)[0];
+  const combo = currentCombo();
+  const modeText = state.results.mode === 'multivariate' ? ` · ${state.results.xreg_columns.length} xregs` : '';
+  const comboText = combo ? ` · combo RMSE ${compact(combo.rmse)}` : '';
+  $('resultSummary').textContent = `${state.results.results.length} models${modeText} · ${state.results.actual.length} test observations · best RMSE: ${best.name}${comboText}`;
+}
+
+function scheduleComboPlotsUpdate() {
+  if (state.comboFrame) return;
+  state.comboFrame = requestAnimationFrame(() => {
+    state.comboFrame = 0;
+    drawPerformance();
+    drawEnsemble();
+    updateMetricsStrip();
+    updateResultSummary();
+  });
+}
+
 function setComboWeight(name, value) {
   if (!state.comboSelected.includes(name)) return;
   state.comboWeights[name] = clamp(value, 0, 1);
   normalizeComboWeights(name);
-  renderComboPanel();
-  drawPerformance();
-  drawEnsemble();
-  updateMetricsStrip();
+  updateComboPanelValues();
+  scheduleComboPlotsUpdate();
 }
 
 function toggleComboModel(name) {
@@ -836,11 +873,7 @@ function updateMetricsStrip() {
 function drawResults() {
   if (!state.results) return;
   renderComboPanel(); drawPerformance(); drawForecasts(); drawEnsemble(); updateMetricsStrip();
-  const best = [...state.results.results].sort((a, b) => a.rmse - b.rmse)[0];
-  const combo = currentCombo();
-  const modeText = state.results.mode === 'multivariate' ? ` · ${state.results.xreg_columns.length} xregs` : '';
-  const comboText = combo ? ` · combo RMSE ${compact(combo.rmse)}` : '';
-  $('resultSummary').textContent = `${state.results.results.length} models${modeText} · ${state.results.actual.length} test observations · best RMSE: ${best.name}${comboText}`;
+  updateResultSummary();
 }
 
 function initSpace() {
@@ -874,6 +907,11 @@ function resetMission() {
   state.labels = [];
   state.results = null;
   state.selectedXregs = [];
+  state.comboSelected = [];
+  state.comboWeights = {};
+  state.comboConstrain = true;
+  if (state.comboFrame) { cancelAnimationFrame(state.comboFrame); state.comboFrame = 0; }
+  state.performanceHitboxes = [];
   $('fileInput').value = '';
   $('fileName').textContent = 'No telemetry attached';
   $('targetColumn').innerHTML = '<option>Awaiting dataset…</option>';
