@@ -1,5 +1,6 @@
 # FastForecast by NXZ
-
+Run:
+https://fastnfuriousforecaster.onrender.com/
 FastForecast by NXZ is a local and deployable three-stage forecasting web agent with a neon intergalactic interface:
 
 1. **Data Dock** — upload CSV/XLSX data, select the signal and frequency, inspect a live train/test split, and render a classical decomposition.
