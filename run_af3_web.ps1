@@ -26,8 +26,8 @@ if ([string]::IsNullOrWhiteSpace($PythonPath)) {
 $url = "http://127.0.0.1:$Port/"
 $healthUrl = "http://127.0.0.1:$Port/api/health"
 try { $ready = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 1 } catch { $ready = $null }
-if ($ready.agent -eq "AgentFastFuriosForecaster") {
-    Write-Host "AF3 is already online at $url"
+if ($ready.agent -in @("AgentFastFuriosForecaster", "FastForecast by NXZ")) {
+    Write-Host "FastForecast is already online at $url"
     exit 0
 }
 
@@ -39,10 +39,10 @@ $process = Start-Process -FilePath $PythonPath `
 
 for ($i = 0; $i -lt 24; $i++) {
     Start-Sleep -Milliseconds 250
-    if ($process.HasExited) { throw "AF3 server exited during startup. Verify that numpy and openpyxl are installed." }
+    if ($process.HasExited) { throw "FastForecast server exited during startup. Verify that numpy and openpyxl are installed." }
     try {
         $ready = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 1
-        if ($ready.ok) { Write-Host "AF3 mission control: $url"; exit 0 }
+        if ($ready.ok) { Write-Host "FastForecast mission control: $url"; exit 0 }
     } catch { }
 }
-throw "AF3 started but did not answer at $url within six seconds."
+throw "FastForecast started but did not answer at $url within six seconds."

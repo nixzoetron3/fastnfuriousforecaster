@@ -3,18 +3,58 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AF3 · AgentFastFuriosForecaster</title>
+  <title>FastForecast by NXZ</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="./styles.css?v=1">
+  <link rel="stylesheet" href="./styles.css?v=2">
 </head>
 <body data-step="1">
   <canvas id="space" aria-hidden="true"></canvas>
   <div class="scanlines" aria-hidden="true"></div>
 
+  <div class="mission-gate" id="missionGate" role="dialog" aria-labelledby="gateTitle" aria-modal="true">
+    <div class="gate-card" id="gateCard">
+      <div class="gate-brand">
+        <svg class="ff-logo gate-logo" viewBox="0 0 140 80" role="img" aria-label="FastForecast fighter jet logo">
+          <defs>
+            <linearGradient id="jetGradientGate" x1="0" x2="1">
+              <stop offset="0" stop-color="#eaffff"/>
+              <stop offset="0.42" stop-color="#57e9ff"/>
+              <stop offset="1" stop-color="#b56bff"/>
+            </linearGradient>
+            <filter id="trailBlurGate"><feGaussianBlur stdDeviation="2.3"/></filter>
+          </defs>
+          <text x="3" y="47" class="ff-trail" filter="url(#trailBlurGate)">FF</text>
+          <path d="M28 47 L103 16 L92 41 L128 47 L91 54 L103 75 Z" fill="url(#jetGradientGate)"/>
+          <path d="M48 46 L84 35 L76 47 L84 59 Z" fill="#030611" opacity=".74"/>
+          <path d="M20 50 C39 39 58 34 86 32" class="jet-streak"/>
+        </svg>
+        <div><span class="eyebrow">NXZ LAUNCH SELECTOR</span><h2 id="gateTitle">FastForecast</h2><small>Choose your first trajectory.</small></div>
+      </div>
+      <div class="gate-choices">
+        <button class="gate-choice" type="button" data-start="weekly"><b>01</b><span>Start with Demo data:<strong>Ducati Panigale weekly demand</strong></span></button>
+        <button class="gate-choice" type="button" data-start="monthly"><b>02</b><span>Start with Demo data:<strong>Ducati Panigale monthly demand</strong></span></button>
+        <button class="gate-choice upload" type="button" data-start="upload"><b>03</b><span>Upload your own temporal dataset<strong>Ensure column labels represent variable names</strong></span></button>
+      </div>
+    </div>
+  </div>
+
   <header class="topbar">
-    <a class="brand" href="#" aria-label="AF3 home">
-      <span class="brand-mark">AF<sup>3</sup></span>
-      <span><strong>AgentFastFuriosForecaster</strong><small>Intergalactic Forecast Intelligence</small></span>
+    <a class="brand" href="#" aria-label="FastForecast home">
+      <svg class="ff-logo brand-logo" viewBox="0 0 140 80" role="img" aria-label="FastForecast fighter jet logo">
+        <defs>
+          <linearGradient id="jetGradientBrand" x1="0" x2="1">
+            <stop offset="0" stop-color="#eaffff"/>
+            <stop offset="0.45" stop-color="#57e9ff"/>
+            <stop offset="1" stop-color="#b56bff"/>
+          </linearGradient>
+          <filter id="trailBlurBrand"><feGaussianBlur stdDeviation="2.1"/></filter>
+        </defs>
+        <text x="3" y="47" class="ff-trail" filter="url(#trailBlurBrand)">FF</text>
+        <path d="M28 47 L103 16 L92 41 L128 47 L91 54 L103 75 Z" fill="url(#jetGradientBrand)"/>
+        <path d="M48 46 L84 35 L76 47 L84 59 Z" fill="#030611" opacity=".74"/>
+        <path d="M20 50 C39 39 58 34 86 32" class="jet-streak"/>
+      </svg>
+      <span><strong>FastForecast</strong><small>by NXZ · Intergalactic Forecast Intelligence</small></span>
     </a>
     <div class="stepper" aria-label="Workflow progress">
       <button class="step-node active" data-go="1" type="button"><b>01</b><span>DATA DOCK</span></button>
@@ -23,13 +63,13 @@
       <i></i>
       <button class="step-node" data-go="3" type="button"><b>03</b><span>ORBITAL RESULTS</span></button>
     </div>
-    <div class="system-status"><span></span> AF3 ONLINE</div>
+    <div class="system-status"><span></span> FASTFORECAST ONLINE</div>
   </header>
 
   <main>
     <section class="page active" id="step1" aria-labelledby="step1Title">
       <div class="page-heading">
-        <div><span class="eyebrow">MISSION 01 · RANDOM ASTEROID BELT</span><h1 id="step1Title">Prime the data engines.</h1></div>
+        <div><span class="eyebrow">MISSION 01 · RANDOM ASTEROID BELT</span><h1 id="step1Title">Prime the FastForecast engines.</h1></div>
         <div class="mission-chip">INPUT / CALIBRATION</div>
       </div>
 
@@ -43,10 +83,20 @@
             <small>or click to browse · up to 25 MB</small>
             <em id="fileName">No telemetry attached</em>
           </label>
-          <button class="text-button" id="demoData" type="button">Load AF3 demo signal instead</button>
+          <button class="text-button" id="demoData" type="button">Open demo / upload launch selector</button>
 
           <div class="field-stack">
             <label><span>Forecast target column</span><select id="targetColumn" disabled><option>Awaiting dataset…</option></select></label>
+            <label><span>Forecasting mode</span>
+              <select id="forecastMode" disabled>
+                <option value="univariate">Univariate forecast</option>
+                <option value="multivariate">Multivariate forecast</option>
+              </select>
+            </label>
+            <section class="xreg-panel hidden" id="xregPanel" aria-live="polite">
+              <div><span>Exogenous Regressors (xreg)</span><small>Tick numeric variables known through the test horizon.</small></div>
+              <div class="xreg-list" id="xregList"></div>
+            </section>
             <label><span>Timeline / label column</span><select id="timeColumn" disabled><option>Row index</option></select></label>
             <label><span>Seasonality frequency</span>
               <select id="frequency">
@@ -100,9 +150,9 @@
             <label><input type="checkbox" name="model" value="SES" checked><span><b>SES</b><small>Level pulse</small><i></i></span></label>
             <label><input type="checkbox" name="model" value="Holt" checked><span><b>HOLT</b><small>Trend drive</small><i></i></span></label>
             <label><input type="checkbox" name="model" value="Holt-Winters" checked><span><b>HOLTWINTER</b><small>Seasonal array</small><i></i></span></label>
-            <label><input type="checkbox" name="model" value="ARIMA" checked><span><b>ARIMA</b><small>Lag navigator</small><i></i></span></label>
+            <label class="xreg-ready"><input type="checkbox" name="model" value="ARIMA" checked><span><b>ARIMA</b><small>Lag navigator</small><i></i></span></label>
             <label><input type="checkbox" name="model" value="ETS" checked><span><b>ETS</b><small>State-space core</small><i></i></span></label>
-            <label><input type="checkbox" name="model" value="NNETAR" checked><span><b>NNETAR</b><small>Neural thruster</small><i></i></span></label>
+            <label class="xreg-ready"><input type="checkbox" name="model" value="NNETAR" checked><span><b>NNETAR</b><small>Neural thruster</small><i></i></span></label>
           </div>
         </section>
 
@@ -133,7 +183,7 @@
 
     <section class="page" id="step3" aria-labelledby="step3Title">
       <div class="page-heading">
-        <div><span class="eyebrow">MISSION 03 · BLACK HOLE ACCRETION ORBIT</span><h1 id="step3Title">Forecast telemetry received.</h1></div>
+        <div><span class="eyebrow">MISSION 03 · BLACK HOLE ACCRETION ORBIT</span><h1 id="step3Title">FastForecast telemetry received.</h1></div>
         <div class="mission-chip magenta">RESULTS / EVALUATION</div>
       </div>
       <div class="results-status" id="resultsStatus"><span class="pulse"></span><b>MODEL ARRAY READY</b><small id="resultSummary">Awaiting model launch</small></div>
@@ -143,12 +193,12 @@
         <section class="glass result-card ensemble"><div class="panel-head"><div><span class="panel-kicker">TRI-CORE CONSENSUS</span><h2>ARIMA + ETS + NNETAR ensemble</h2></div><span class="chart-no">03</span></div><div class="canvas-wrap"><canvas id="ensembleChart"></canvas><div class="empty-chart hidden" id="ensembleEmpty">SELECT ARIMA, ETS & NNETAR<br><small>All three are required for the equal-average ensemble</small></div></div></section>
       </div>
       <div class="metrics-strip" id="metricsStrip"></div>
-      <div class="page-actions"><button class="back-button" data-go="2" type="button">← PREVIOUS PAGE</button><button class="back-button bright" data-go="1" type="button">NEW MISSION ↻</button></div>
+      <div class="page-actions"><button class="back-button" data-go="2" type="button">← PREVIOUS PAGE</button><button class="back-button bright" id="newMissionBtn" type="button">NEW MISSION ↻</button></div>
     </section>
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="loading-overlay hidden" id="loading"><div class="warp-ring"></div><strong>ENGAGING MODEL THRUSTERS</strong><span id="loadingText">Crossing the forecast event horizon…</span></div>
-  <script src="./app.js?v=1"></script>
+  <script src="./app.js?v=2"></script>
 </body>
 </html>

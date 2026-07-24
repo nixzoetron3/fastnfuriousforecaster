@@ -1,6 +1,10 @@
 const $ = (id) => document.getElementById(id);
-const state = { step: 1, rows: [], columns: [], numeric: [], series: [], labels: [], results: null, particles: [], mouse: { x: 0, y: 0 } };
+const state = { step: 1, rows: [], columns: [], numeric: [], series: [], seriesRows: [], labels: [], results: null, selectedXregs: [], particles: [], mouse: { x: 0, y: 0 } };
 const colors = { Actual: '#f4fbff', SES: '#6dff9d', Holt: '#ffca55', 'Holt-Winters': '#ff7c65', ARIMA: '#57e9ff', ETS: '#b56bff', NNETAR: '#ff62c6', Ensemble: '#72ffb2' };
+const DEMO_FILES = {
+  weekly: { path: './demo/ducatidemandweekly.csv', name: 'Ducati Panigale weekly demand', target: 'Ducati_Demand(*1000 units)', time: 'Date', frequency: '52' },
+  monthly: { path: './demo/ducatidemandmonthly.csv', name: 'Ducati Panigale monthly demand', target: 'panigale_demand(*100 units)', time: 'date', frequency: '12' },
+};
 
 function toast(message) {
   $('toast').textContent = message;
@@ -14,14 +18,58 @@ function safeNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-function demoDataset() {
-  const rows = [];
-  for (let i = 0; i < 120; i += 1) {
-    const date = new Date(2016, i, 1);
-    const signal = 210 + i * 1.18 + Math.sin(i * Math.PI / 6) * 32 + Math.cos(i * .29) * 11 + Math.sin(i * 1.7) * 4;
-    rows.push({ Month: date.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit' }), 'Orbital Demand': signal.toFixed(2), 'Fuel Index': (70 + Math.sin(i / 5) * 8).toFixed(2) });
+function openMissionGate() {
+  const gate = $('missionGate');
+  $('gateCard').classList.remove('shattering');
+  gate.classList.remove('hidden');
+}
+
+function shatterMissionGate(afterShatter) {
+  const gate = $('missionGate');
+  const card = $('gateCard');
+  const rect = card.getBoundingClientRect();
+  card.classList.add('shattering');
+  for (let i = 0; i < 42; i += 1) {
+    const shard = document.createElement('i');
+    shard.className = 'gate-shard';
+    shard.style.left = `${rect.left + Math.random() * rect.width}px`;
+    shard.style.top = `${rect.top + Math.random() * rect.height}px`;
+    shard.style.setProperty('--tx', `${(Math.random() - .5) * innerWidth * 1.25}px`);
+    shard.style.setProperty('--ty', `${(Math.random() - .5) * innerHeight * 1.25}px`);
+    shard.style.setProperty('--rot', `${(Math.random() - .5) * 940}deg`);
+    document.body.appendChild(shard);
+    setTimeout(() => shard.remove(), 980);
   }
-  loadDataset({ name: 'af3_demo_signal.csv', columns: ['Month', 'Orbital Demand', 'Fuel Index'], numeric_columns: ['Orbital Demand', 'Fuel Index'], rows, row_count: rows.length });
+  setTimeout(() => {
+    gate.classList.add('hidden');
+    card.classList.remove('shattering');
+    if (typeof afterShatter === 'function') afterShatter();
+  }, 560);
+}
+
+async function loadDemoFile(kind) {
+  const demo = DEMO_FILES[kind];
+  if (!demo) return;
+  $('fileName').textContent = `Loading ${demo.name}…`;
+  try {
+    const fileResponse = await fetch(demo.path, { cache: 'no-store' });
+    if (!fileResponse.ok) throw new Error(`Demo file ${demo.name} could not be loaded.`);
+    const blob = await fileResponse.blob();
+    const response = await fetch('/api/upload', { method: 'POST', headers: { 'X-Filename': demo.path.split('/').pop() }, body: blob });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(payload.error || 'Demo upload failed.');
+    loadDataset(payload, { mode: 'multivariate' });
+    setSelectValue('targetColumn', demo.target);
+    setSelectValue('timeColumn', demo.time);
+    $('frequency').value = demo.frequency;
+    state.selectedXregs = state.numeric.filter((name) => name !== $('targetColumn').value && name !== $('timeColumn').value);
+    updateSeries();
+    renderXregPanel();
+    toast(`${demo.name} loaded. Multivariate mode is armed with xreg candidates.`);
+  } catch (error) {
+    $('fileName').textContent = 'Demo load rejected';
+    toast(error.message);
+  }
 }
 
 async function uploadFile(file) {
@@ -38,14 +86,18 @@ async function uploadFile(file) {
   }
 }
 
-function loadDataset(payload) {
+function loadDataset(payload, options = {}) {
   state.rows = payload.rows || [];
   state.columns = payload.columns || [];
   state.numeric = payload.numeric_columns || [];
+  state.results = null;
+  state.selectedXregs = [];
   $('fileName').textContent = `${payload.name} · ${payload.row_count.toLocaleString()} rows${payload.sheet ? ` · ${payload.sheet}` : ''}`;
   const target = $('targetColumn');
   target.innerHTML = state.numeric.length ? state.numeric.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('') : '<option>No numeric columns detected</option>';
   target.disabled = !state.numeric.length;
+  $('forecastMode').disabled = !state.numeric.length;
+  $('forecastMode').value = options.mode === 'multivariate' ? 'multivariate' : 'univariate';
   const time = $('timeColumn');
   time.innerHTML = '<option value="">Row index</option>' + state.columns.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
   time.disabled = false;
@@ -54,19 +106,66 @@ function loadDataset(payload) {
   $('datasetMeta').textContent = `${payload.row_count.toLocaleString()} observations received · ${state.columns.length} columns · ${state.numeric.length} numeric signals`;
   $('decomposeBtn').disabled = !state.numeric.length;
   $('proceedBtn').disabled = !state.numeric.length;
+  if (options.autoSelectXregs) state.selectedXregs = state.numeric.filter((name) => name !== target.value && name !== time.value);
+  renderXregPanel();
   updateSeries();
+}
+
+function setSelectValue(id, value) {
+  const select = $(id);
+  if ([...select.options].some((option) => option.value === value)) select.value = value;
 }
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
 }
 
+function isMultivariate() {
+  return $('forecastMode').value === 'multivariate';
+}
+
+function validXregCandidates() {
+  const target = $('targetColumn').value;
+  const time = $('timeColumn').value;
+  return state.columns.map((name) => ({
+    name,
+    enabled: state.numeric.includes(name) && name !== target && name !== time,
+    reason: !state.numeric.includes(name) ? 'text' : name === target ? 'target' : name === time ? 'time' : 'numeric',
+  }));
+}
+
+function selectedXregs() {
+  return [...document.querySelectorAll('input[data-xreg]:checked')].map((input) => input.value);
+}
+
+function renderXregPanel() {
+  const panel = $('xregPanel');
+  const list = $('xregList');
+  panel.classList.toggle('hidden', !isMultivariate() || !state.columns.length);
+  if (!isMultivariate() || !state.columns.length) {
+    state.selectedXregs = [];
+    list.innerHTML = '';
+    return;
+  }
+  const candidates = validXregCandidates();
+  const allowed = new Set(candidates.filter((item) => item.enabled).map((item) => item.name));
+  state.selectedXregs = state.selectedXregs.filter((name) => allowed.has(name));
+  list.innerHTML = candidates.map((item) => {
+    const checked = state.selectedXregs.includes(item.name) ? ' checked' : '';
+    const disabled = item.enabled ? '' : ' disabled';
+    const className = item.enabled ? '' : ' class="disabled"';
+    return `<label${className}><input type="checkbox" data-xreg value="${escapeHtml(item.name)}"${checked}${disabled}><span>${escapeHtml(item.name)}</span><small>${escapeHtml(item.reason)}</small></label>`;
+  }).join('');
+  document.querySelectorAll('input[data-xreg]').forEach((input) => input.addEventListener('change', () => { state.selectedXregs = selectedXregs(); }));
+}
+
 function updateSeries() {
   if (!state.rows.length || !$('targetColumn').value) return;
   const target = $('targetColumn').value;
   const time = $('timeColumn').value;
-  const pairs = state.rows.map((row, i) => ({ value: safeNumber(row[target]), label: time ? row[time] : i + 1 })).filter((item) => item.value !== null);
+  const pairs = state.rows.map((row, i) => ({ value: safeNumber(row[target]), label: time ? row[time] : i + 1, row })).filter((item) => item.value !== null);
   state.series = pairs.map((item) => item.value);
+  state.seriesRows = pairs.map((item) => item.row);
   state.labels = pairs.map((item) => String(item.label ?? ''));
   $('seriesTitle').textContent = target;
   $('seriesEmpty').classList.toggle('hidden', state.series.length > 0);
@@ -172,6 +271,7 @@ function drawDecomposition() {
 
 function navigate(step) {
   if (step > 1 && !state.series.length) { toast('Load a numeric time series before leaving the data dock.'); return; }
+  if (step > 1 && isMultivariate() && !selectedXregs().length) { toast('Tick at least one numeric xreg before leaving the data dock.'); return; }
   if (step === 3 && !state.results) { toast('Run at least one model before entering the results orbit.'); return; }
   state.step = step; document.body.dataset.step = step;
   document.querySelectorAll('.page').forEach((page, i) => page.classList.toggle('active', i + 1 === step));
@@ -191,13 +291,25 @@ function playLaunchSound() {
   } catch (_) { /* Audio is cosmetic. */ }
 }
 
+function buildXregPayload() {
+  if (!isMultivariate()) return null;
+  const names = selectedXregs();
+  if (!names.length) throw new Error('Select at least one numeric exogenous regressor for multivariate forecasting.');
+  const xreg = {};
+  names.forEach((name) => {
+    xreg[name] = state.seriesRows.map((row) => safeNumber(row[name]));
+  });
+  return xreg;
+}
+
 async function runModels() {
   const models = [...document.querySelectorAll('input[name=model]:checked')].map((input) => input.value);
   if (!models.length) { toast('Select at least one forecast engine.'); return; }
   playLaunchSound(); $('loading').classList.remove('hidden');
   setTimeout(() => { $('loadingText').textContent = 'Synchronizing model trajectories…'; }, 450);
   try {
-    const payload = { series: state.series, train_pct: Number($('trainPct').value), frequency: Number($('frequency').value), models, params: { ets: { error: $('etsError').value, trend: $('etsTrend').value, season: $('etsSeason').value, allow_multiplicative_trend: $('etsAllowMultiplicative').checked, restrict: $('etsRestrict').checked }, nnetar: { p: Number($('nnetP').value), P: Number($('nnetSP').value), size: Number($('nnetSize').value), repeats: Number($('nnetRepeats').value), lambda: 10 ** Number($('nnetLambda').value) } } };
+    const xreg = buildXregPayload();
+    const payload = { series: state.series, mode: isMultivariate() ? 'multivariate' : 'univariate', xreg, train_pct: Number($('trainPct').value), frequency: Number($('frequency').value), models, params: { ets: { error: $('etsError').value, trend: $('etsTrend').value, season: $('etsSeason').value, allow_multiplicative_trend: $('etsAllowMultiplicative').checked, restrict: $('etsRestrict').checked }, nnetar: { p: Number($('nnetP').value), P: Number($('nnetSP').value), size: Number($('nnetSize').value), repeats: Number($('nnetRepeats').value), lambda: 10 ** Number($('nnetLambda').value) } } };
     const response = await fetch('/api/forecast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const result = await response.json(); if (!response.ok || !result.ok) throw new Error(result.error || 'Forecast run failed.');
     state.results = result; navigate(3);
@@ -215,12 +327,12 @@ function drawPerformance() {
   const xVals = results.map(r => r.rmse), yVals = results.map(r => r.correlation); const xb = bounds([xVals]), yb = { min: Math.min(-.05, ...yVals) - .05, max: Math.max(.2, ...yVals) + .08 };
   const area = { x: 58, y: 24, w: width - 82, h: height - 65 }; ctx.clearRect(0, 0, width, height); ctx.font = '8px Space Mono';
   for (let i = 0; i <= 4; i += 1) { const x = area.x + area.w * i / 4, y = area.y + area.h * i / 4; ctx.strokeStyle = 'rgba(100,190,225,.12)'; ctx.beginPath(); ctx.moveTo(x, area.y); ctx.lineTo(x, area.y + area.h); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke(); ctx.fillStyle = '#698497'; ctx.fillText(compact(xb.min + (xb.max - xb.min) * i / 4), x - 8, height - 20); ctx.fillText((yb.max - (yb.max - yb.min) * i / 4).toFixed(2), 12, y + 3); }
-  results.forEach((r, i) => { const x = area.x + (r.rmse - xb.min) / (xb.max - xb.min) * area.w, y = area.y + (1 - (r.correlation - yb.min) / (yb.max - yb.min)) * area.h; const color = colors[r.name] || colors.ARIMA; ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 14; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0; ctx.fillStyle = '#d8edf5'; ctx.fillText(r.name, x + 9, y - 7 - (i % 2) * 7); });
+  results.forEach((r, i) => { const x = area.x + (r.rmse - xb.min) / Math.max(1e-9, xb.max - xb.min) * area.w, y = area.y + (1 - (r.correlation - yb.min) / Math.max(1e-9, yb.max - yb.min)) * area.h; const color = colors[r.model || r.name] || colors.ARIMA; ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 14; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0; ctx.fillStyle = '#d8edf5'; ctx.fillText(r.name, x + 9, y - 7 - (i % 2) * 7); });
   ctx.fillStyle = '#7691a4'; ctx.fillText('LOWER RMSE  ←', area.x, height - 4); ctx.fillText('CORRELATION', 4, 11);
 }
 
 function drawForecasts() {
-  const actual = state.results.actual, items = [{ name: 'Actual', color: colors.Actual, values: actual }, ...state.results.results.map(r => ({ name: r.name, color: colors[r.name], values: r.forecast }))];
+  const actual = state.results.actual, items = [{ name: 'Actual', color: colors.Actual, values: actual }, ...state.results.results.map(r => ({ name: r.name, color: colors[r.model || r.name], values: r.forecast }))];
   const chart = chartBase($('forecastChart'), items.map(i => i.values)); if (!chart) return; items.forEach((item, i) => line(chart.ctx, item.values, chart, item.color, 0, actual.length, i ? 1.6 : 3, i ? [] : [])); legend(chart.ctx, items, chart.width, 9); drawTimeAxis(chart, state.labels.slice(state.results.split));
 }
 
@@ -243,7 +355,8 @@ function drawResults() {
   if (!state.results) return;
   drawPerformance(); drawForecasts(); drawEnsemble();
   const best = [...state.results.results].sort((a, b) => a.rmse - b.rmse)[0];
-  $('resultSummary').textContent = `${state.results.results.length} models · ${state.results.actual.length} test observations · best RMSE: ${best.name}`;
+  const modeText = state.results.mode === 'multivariate' ? ` · ${state.results.xreg_columns.length} xregs` : '';
+  $('resultSummary').textContent = `${state.results.results.length} models${modeText} · ${state.results.actual.length} test observations · best RMSE: ${best.name}`;
   $('metricsStrip').innerHTML = state.results.results.map(r => `<div class="metric-pill"><b>${r.name}</b><span>RMSE ${compact(r.rmse)} · CORR ${r.correlation.toFixed(3)}</span></div>`).join('') + (state.results.ensemble_metrics ? `<div class="metric-pill"><b>ENSEMBLE</b><span>RMSE ${compact(state.results.ensemble_metrics.rmse)} · CORR ${state.results.ensemble_metrics.correlation.toFixed(3)}</span></div>` : '');
 }
 
@@ -262,14 +375,75 @@ function initSpace() {
   addEventListener('resize', resize); resize(); requestAnimationFrame(frame);
 }
 
+function clearCanvasById(id) {
+  const canvas = $(id);
+  if (!canvas) return;
+  const fit = fitCanvas(canvas);
+  if (fit) fit.ctx.clearRect(0, 0, fit.width, fit.height);
+}
+
+function resetMission() {
+  state.rows = [];
+  state.columns = [];
+  state.numeric = [];
+  state.series = [];
+  state.seriesRows = [];
+  state.labels = [];
+  state.results = null;
+  state.selectedXregs = [];
+  $('fileInput').value = '';
+  $('fileName').textContent = 'No telemetry attached';
+  $('targetColumn').innerHTML = '<option>Awaiting dataset…</option>';
+  $('targetColumn').disabled = true;
+  $('forecastMode').value = 'univariate';
+  $('forecastMode').disabled = true;
+  $('timeColumn').innerHTML = '<option>Row index</option>';
+  $('timeColumn').disabled = true;
+  $('frequency').value = '12';
+  $('trainPct').value = '80';
+  $('datasetMeta').textContent = 'Attach data to initialize the signal array.';
+  $('seriesTitle').textContent = 'Train / test partition';
+  $('seriesEmpty').classList.remove('hidden');
+  $('decompositionPanel').classList.add('hidden');
+  $('xregPanel').classList.add('hidden');
+  $('xregList').innerHTML = '';
+  $('decomposeBtn').disabled = true;
+  $('proceedBtn').disabled = true;
+  $('resultSummary').textContent = 'Awaiting model launch';
+  $('metricsStrip').innerHTML = '';
+  $('trainCount').textContent = '—';
+  $('testCount').textContent = '—';
+  $('freqReadout').textContent = '12';
+  ['seriesChart', 'performanceChart', 'forecastChart', 'ensembleChart', 'decompObserved', 'decompTrend', 'decompSeasonal', 'decompRemainder'].forEach(clearCanvasById);
+  navigate(1);
+  openMissionGate();
+}
+
 document.querySelectorAll('[data-go]').forEach(btn => btn.addEventListener('click', () => navigate(Number(btn.dataset.go))));
 $('fileInput').addEventListener('change', (event) => uploadFile(event.target.files[0]));
 ['dragenter', 'dragover'].forEach(name => $('uploadZone').addEventListener(name, e => { e.preventDefault(); $('uploadZone').classList.add('drag'); }));
 ['dragleave', 'drop'].forEach(name => $('uploadZone').addEventListener(name, e => { e.preventDefault(); $('uploadZone').classList.remove('drag'); }));
 $('uploadZone').addEventListener('drop', e => uploadFile(e.dataTransfer.files[0]));
-$('demoData').addEventListener('click', demoDataset); $('targetColumn').addEventListener('change', updateSeries); $('timeColumn').addEventListener('change', updateSeries); $('trainPct').addEventListener('input', updatePartition); $('frequency').addEventListener('change', () => { updatePartition(); if (!$('decompositionPanel').classList.contains('hidden')) drawDecomposition(); });
+$('demoData').addEventListener('click', openMissionGate);
+document.querySelectorAll('[data-start]').forEach((button) => button.addEventListener('click', () => {
+  const choice = button.dataset.start;
+  if (choice === 'upload') {
+    $('fileInput').click();
+    shatterMissionGate();
+  } else {
+    shatterMissionGate(() => loadDemoFile(choice));
+  }
+}));
+$('targetColumn').addEventListener('change', () => { renderXregPanel(); updateSeries(); });
+$('timeColumn').addEventListener('change', () => { renderXregPanel(); updateSeries(); });
+$('forecastMode').addEventListener('change', () => {
+  if (isMultivariate() && !state.selectedXregs.length) state.selectedXregs = state.numeric.filter((name) => name !== $('targetColumn').value && name !== $('timeColumn').value);
+  renderXregPanel();
+});
+$('trainPct').addEventListener('input', updatePartition); $('frequency').addEventListener('change', () => { updatePartition(); if (!$('decompositionPanel').classList.contains('hidden')) drawDecomposition(); });
 $('decomposeBtn').addEventListener('click', () => { $('decompositionPanel').classList.remove('hidden'); requestAnimationFrame(drawDecomposition); $('decompositionPanel').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
 $('closeDecomp').addEventListener('click', () => $('decompositionPanel').classList.add('hidden')); $('proceedBtn').addEventListener('click', () => navigate(2)); $('runModels').addEventListener('click', runModels);
+$('newMissionBtn').addEventListener('click', resetMission);
 $('selectAll').addEventListener('click', () => { const boxes = [...document.querySelectorAll('input[name=model]')], all = boxes.every(b => b.checked); boxes.forEach(b => { b.checked = !all; }); $('selectAll').textContent = all ? 'Select all' : 'Clear all'; });
 [['nnetP','pOut',v=>v],['nnetSP','POut',v=>v],['nnetSize','sizeOut',v=>v],['nnetRepeats','repeatsOut',v=>v],['nnetLambda','lambdaOut',v=>(10 ** Number(v)).toPrecision(1)]].forEach(([id,out,format]) => $(id).addEventListener('input', () => $(out).textContent = format($(id).value)));
 addEventListener('pointermove', e => { state.mouse.x = e.clientX - innerWidth / 2; state.mouse.y = e.clientY - innerHeight / 2; });

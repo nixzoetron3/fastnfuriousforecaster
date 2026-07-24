@@ -1,6 +1,6 @@
-# AF3 Render beta deployment guide
+# FastForecast by NXZ Render beta deployment guide
 
-This guide publishes AgentFastFuriosForecaster (AF3) as a single Render Python Web Service. The same public URL serves the neon frontend and the forecasting API routes.
+This guide publishes FastForecast by NXZ as a single Render Python Web Service. The same public URL serves the neon frontend and the forecasting API routes.
 
 ## What gets deployed
 
@@ -49,5 +49,5 @@ PYTHON_VERSION=3.12.11
 
 - Free Render web services can sleep after inactivity. The first page load after sleep may take about a minute.
 - Uploaded files are processed in memory and are not intended for long-term storage.
-- Keep test files reasonably small; AF3 currently enforces a 25 MB upload limit.
+- Keep test files reasonably small; FastForecast currently enforces a 25 MB upload limit.
 - Share the final `https://...onrender.com/` URL with testers.

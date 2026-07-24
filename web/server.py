@@ -164,7 +164,7 @@ def arima_like(train, horizon, p):
     return output
 
 
-def nnetar(train, horizon, period, params):
+def nnetar(train, horizon, period, params, x_train=None, x_future=None):
     p = max(1, min(int(params.get("p", 6)), 24))
     seasonal_order = max(0, min(int(params.get("P", 1)), 4))
     size = max(2, min(int(params.get("size", 8)), 64))
@@ -175,17 +175,27 @@ def nnetar(train, horizon, period, params):
     max_lag = max(lags)
     if len(train) < max_lag + 8:
         return holt(train, horizon, damped=True)
+    use_xreg = (
+        x_train is not None
+        and x_future is not None
+        and getattr(x_train, "size", 0) > 0
+        and x_train.shape[0] == len(train)
+        and x_future.shape[0] >= horizon
+    )
     mean, scale = float(np.mean(train)), float(np.std(train) or 1.0)
     norm = [(float(v) - mean) / scale for v in train]
     x, y = [], []
     for i in range(max_lag, len(norm)):
-        x.append([norm[i - lag] for lag in lags])
+        features = [norm[i - lag] for lag in lags]
+        if use_xreg:
+            features.extend(x_train[i].tolist())
+        x.append(features)
         y.append(norm[i])
     x, y = np.asarray(x), np.asarray(y)
     forecasts = []
     for repeat in range(repeats):
         rng = np.random.default_rng(7300 + repeat)
-        weights = rng.normal(0, 0.7, (len(lags), size))
+        weights = rng.normal(0, 0.7, (x.shape[1], size))
         bias = rng.normal(0, 0.25, size)
         hidden = np.tanh(x @ weights + bias)
         design = np.column_stack([np.ones(len(hidden)), hidden])
@@ -193,8 +203,11 @@ def nnetar(train, horizon, period, params):
         penalty[0, 0] = 0
         out = np.linalg.solve(design.T @ design + penalty, design.T @ y)
         history, path = list(norm), []
-        for _ in range(horizon):
-            features = np.asarray([history[-lag] for lag in lags])
+        for step in range(horizon):
+            features = [history[-lag] for lag in lags]
+            if use_xreg:
+                features.extend(x_future[step].tolist())
+            features = np.asarray(features)
             value = float(np.dot(np.r_[1.0, np.tanh(features @ weights + bias)], out))
             value = float(np.clip(value, -6, 6))
             history.append(value)
@@ -212,6 +225,70 @@ def metrics(actual, predicted):
     return {"rmse": rmse, "correlation": corr}
 
 
+def solve_ridge(design, target, ridge=0.02):
+    design = np.asarray(design, dtype=float)
+    target = np.asarray(target, dtype=float)
+    penalty = np.eye(design.shape[1]) * ridge
+    penalty[0, 0] = 0.0
+    return np.linalg.solve(design.T @ design + penalty, design.T @ target)
+
+
+def prepare_xreg(payload, length, split):
+    mode = str(payload.get("mode", "univariate")).lower()
+    raw = payload.get("xreg") or {}
+    if mode != "multivariate":
+        return {"enabled": False, "names": [], "train": None, "future": None}
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError("Multivariate mode requires at least one selected xreg column.")
+
+    names, columns = [], []
+    for name, values in raw.items():
+        if not isinstance(values, list) or len(values) != length:
+            continue
+        parsed = [finite(value) for value in values]
+        usable_train = sum(value is not None for value in parsed[:split])
+        if usable_train >= max(3, int(split * 0.25)):
+            names.append(str(name))
+            columns.append([np.nan if value is None else float(value) for value in parsed])
+    if not columns:
+        raise ValueError("Selected xreg columns did not contain enough numeric training values.")
+
+    matrix = np.asarray(columns, dtype=float).T
+    train = matrix[:split]
+    future = matrix[split:]
+    means = np.nanmean(train, axis=0)
+    means = np.where(np.isfinite(means), means, 0.0)
+    train = np.where(np.isfinite(train), train, means)
+    future = np.where(np.isfinite(future), future, means)
+    scales = np.std(train, axis=0)
+    scales = np.where(scales > 1e-9, scales, 1.0)
+    return {"enabled": True, "names": names, "train": (train - means) / scales, "future": (future - means) / scales}
+
+
+def arimax_like(train, horizon, p, x_train=None, x_future=None):
+    if x_train is None or x_future is None or x_train.size == 0:
+        return arima_like(train, horizon, p)
+    p = max(1, min(int(p), len(train) // 3, 18))
+    if len(train) <= p + 8 or x_future.shape[0] < horizon:
+        return arima_like(train, horizon, p)
+
+    mean, scale = float(np.mean(train)), float(np.std(train) or 1.0)
+    norm = [(float(value) - mean) / scale for value in train]
+    design, target = [], []
+    for i in range(p, len(norm)):
+        design.append([1.0, *norm[i - p : i][::-1], *x_train[i].tolist()])
+        target.append(norm[i])
+    coef = solve_ridge(design, target, ridge=0.03)
+    history, output = list(norm), []
+    for step in range(horizon):
+        features = [1.0, *history[-p:][::-1], *x_future[step].tolist()]
+        value = float(np.dot(coef, features))
+        value = float(np.clip(value, -6, 6))
+        history.append(value)
+        output.append(value * scale + mean)
+    return output
+
+
 def run_forecast(payload):
     series = [finite(value) for value in payload.get("series", [])]
     series = [value for value in series if value is not None]
@@ -225,11 +302,15 @@ def run_forecast(payload):
     selected = payload.get("models") or []
     params = payload.get("params") or {}
     ets = params.get("ets") or {}
+    xreg = prepare_xreg(payload, len(series), split)
+    xreg_models = {"ARIMA", "NNETAR"} if xreg["enabled"] else set()
     model_fns = {
         "SES": lambda: ses(train, horizon),
         "Holt": lambda: holt(train, horizon),
         "Holt-Winters": lambda: seasonal_forecast(train, horizon, period),
-        "ARIMA": lambda: arima_like(train, horizon, params.get("nnetar", {}).get("p", 6)),
+        "ARIMA": lambda: arimax_like(train, horizon, params.get("nnetar", {}).get("p", 6), xreg["train"], xreg["future"])
+        if xreg["enabled"]
+        else arima_like(train, horizon, params.get("nnetar", {}).get("p", 6)),
         "ETS": lambda: seasonal_forecast(
             train,
             horizon,
@@ -237,22 +318,27 @@ def run_forecast(payload):
             multiplicative=ets.get("season") == "Multiplicative",
             damped=False,
         ),
-        "NNETAR": lambda: nnetar(train, horizon, period, params.get("nnetar", {})),
+        "NNETAR": lambda: nnetar(train, horizon, period, params.get("nnetar", {}), xreg["train"], xreg["future"])
+        if xreg["enabled"]
+        else nnetar(train, horizon, period, params.get("nnetar", {})),
     }
     results = []
     for name in selected:
         if name not in model_fns:
             continue
         prediction = model_fns[name]()
-        results.append({"name": name, "forecast": prediction, **metrics(actual, prediction)})
+        display_name = f"{name} + xreg" if name in xreg_models else name
+        results.append({"name": display_name, "model": name, "forecast": prediction, **metrics(actual, prediction)})
     if not results:
         raise ValueError("Select at least one forecasting model.")
-    trio = {item["name"]: item["forecast"] for item in results if item["name"] in {"ARIMA", "ETS", "NNETAR"}}
+    trio = {item["model"]: item["forecast"] for item in results if item["model"] in {"ARIMA", "ETS", "NNETAR"}}
     ensemble = None
     if len(trio) == 3:
         ensemble = np.mean(np.asarray(list(trio.values())), axis=0).astype(float).tolist()
     return {
         "ok": True,
+        "mode": "multivariate" if xreg["enabled"] else "univariate",
+        "xreg_columns": xreg["names"] if xreg["enabled"] else [],
         "split": split,
         "train": train.astype(float).tolist(),
         "actual": actual,
@@ -262,7 +348,7 @@ def run_forecast(payload):
     }
 
 
-class AF3Handler(SimpleHTTPRequestHandler):
+class FastForecastHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
@@ -276,7 +362,7 @@ class AF3Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path in {"/api/health", "/healthz"}:
-            respond(self, 200, {"ok": True, "agent": "AgentFastFuriosForecaster", "codename": "AF3"})
+            respond(self, 200, {"ok": True, "agent": "FastForecast by NXZ", "codename": "FastForecast"})
             return
         if path == "/favicon.ico":
             self.send_response(204)
@@ -303,12 +389,12 @@ class AF3Handler(SimpleHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AF3 local web agent")
+    parser = argparse.ArgumentParser(description="FastForecast by NXZ web agent")
     parser.add_argument("--host", default=default_host())
     parser.add_argument("--port", type=int, default=default_port())
     args = parser.parse_args()
-    server = ThreadingHTTPServer((args.host, args.port), AF3Handler)
-    print(f"AF3 mission control: http://{args.host}:{args.port}/", flush=True)
+    server = ThreadingHTTPServer((args.host, args.port), FastForecastHandler)
+    print(f"FastForecast mission control: http://{args.host}:{args.port}/", flush=True)
     server.serve_forever()
 
 
