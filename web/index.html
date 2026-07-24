@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FastForecast by NXZ</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="./styles.css?v=3">
+  <link rel="stylesheet" href="./styles.css?v=4">
 </head>
 <body data-step="1">
   <canvas id="space" aria-hidden="true"></canvas>
@@ -70,7 +70,14 @@
     <section class="page active" id="step1" aria-labelledby="step1Title">
       <div class="page-heading">
         <div><span class="eyebrow">MISSION 01 · RANDOM ASTEROID BELT</span><h1 id="step1Title">Prime the FastForecast engines.</h1></div>
-        <button class="fresh-button" id="startAfreshBtn" type="button">Click Here to Start Afresh</button>
+        <div class="dock-actions">
+          <label class="sound-control" for="musicVolume" aria-label="Background music volume">
+            <span class="speaker-icon" aria-hidden="true">▰))</span>
+            <input id="musicVolume" type="range" min="0" max="100" value="35">
+            <output id="musicOut">35</output>
+          </label>
+          <button class="fresh-button" id="startAfreshBtn" type="button">Click Here to Start Afresh</button>
+        </div>
       </div>
 
       <div class="split-layout">
@@ -102,7 +109,7 @@
               <div><span>Exogenous Regressors (xreg)</span><small>Tick numeric variables known through the test horizon.</small></div>
               <div class="xreg-list" id="xregList"></div>
             </section>
-            <label><span>Timeline / label column</span><select id="timeColumn" disabled><option>Row index</option></select></label>
+            <label><span>Sequence data in which order</span><select id="timeColumn" disabled><option value="">Row Index</option></select></label>
             <label><span>Seasonality frequency</span>
               <select id="frequency">
                 <option value="1">1 · None</option><option value="4">4 · Quarterly</option>
@@ -219,7 +226,8 @@
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <audio id="bgMusic" src="./audio/leberch-space-440026.mp3" loop preload="auto"></audio>
   <div class="loading-overlay hidden" id="loading"><div class="warp-ring"></div><strong>ENGAGING MODEL THRUSTERS</strong><span id="loadingText">Crossing the forecast event horizon…</span></div>
-  <script src="./app.js?v=3"></script>
+  <script src="./app.js?v=4"></script>
 </body>
 </html>

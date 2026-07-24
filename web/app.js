@@ -25,57 +25,90 @@ function audioContext() {
   return state.audioContext;
 }
 
-function playModernClickSound() {
+function playMicroSwitchClickSound() {
   try {
     const ac = audioContext(); if (!ac) return;
     const now = ac.currentTime;
     const gain = ac.createGain(); gain.connect(ac.destination);
     gain.gain.setValueAtTime(.001, now);
-    gain.gain.exponentialRampToValueAtTime(.055, now + .01);
-    gain.gain.exponentialRampToValueAtTime(.001, now + .105);
-    const ping = ac.createOscillator(); ping.type = 'triangle';
-    ping.frequency.setValueAtTime(1120, now);
-    ping.frequency.exponentialRampToValueAtTime(720, now + .08);
-    ping.connect(gain); ping.start(now); ping.stop(now + .12);
-  } catch (_) { /* Cosmetic click sound can fail silently. */ }
+    gain.gain.exponentialRampToValueAtTime(.075, now + .004);
+    gain.gain.exponentialRampToValueAtTime(.001, now + .045);
+    const buffer = ac.createBuffer(1, Math.floor(ac.sampleRate * .035), ac.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i += 1) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / data.length * 12);
+    }
+    const snap = ac.createBufferSource(); snap.buffer = buffer;
+    const filter = ac.createBiquadFilter(); filter.type = 'bandpass'; filter.frequency.value = 2300; filter.Q.value = 8;
+    snap.connect(filter); filter.connect(gain); snap.start(now);
+
+    const ping = ac.createOscillator(); ping.type = 'square';
+    ping.frequency.setValueAtTime(1650, now + .006);
+    const pingGain = ac.createGain(); pingGain.connect(ac.destination);
+    pingGain.gain.setValueAtTime(.001, now + .006);
+    pingGain.gain.exponentialRampToValueAtTime(.025, now + .011);
+    pingGain.gain.exponentialRampToValueAtTime(.001, now + .06);
+    ping.connect(pingGain); ping.start(now + .006); ping.stop(now + .065);
+  } catch (_) { /* Cosmetic micro-switch sound can fail silently. */ }
 }
 
-function playShotgunSound() {
+function playWinFanfareSound() {
   try {
     const ac = audioContext(); if (!ac) return;
     const now = ac.currentTime;
     const master = ac.createGain(); master.connect(ac.destination);
     master.gain.setValueAtTime(.001, now);
-    master.gain.exponentialRampToValueAtTime(.48, now + .012);
-    master.gain.exponentialRampToValueAtTime(.07, now + .16);
-    master.gain.exponentialRampToValueAtTime(.001, now + .72);
+    master.gain.exponentialRampToValueAtTime(.18, now + .035);
+    master.gain.exponentialRampToValueAtTime(.12, now + 1.0);
+    master.gain.exponentialRampToValueAtTime(.001, now + 1.65);
+    const notes = [
+      { f: 523.25, t: 0, d: .22 },
+      { f: 659.25, t: .16, d: .22 },
+      { f: 783.99, t: .32, d: .28 },
+      { f: 1046.5, t: .58, d: .58 },
+      { f: 1318.5, t: .84, d: .42 },
+    ];
+    notes.forEach((note, index) => {
+      const osc = ac.createOscillator(); osc.type = index < 3 ? 'triangle' : 'sawtooth';
+      const gain = ac.createGain(); gain.connect(master);
+      const start = now + note.t;
+      gain.gain.setValueAtTime(.001, start);
+      gain.gain.exponentialRampToValueAtTime(index < 3 ? .13 : .08, start + .025);
+      gain.gain.exponentialRampToValueAtTime(.001, start + note.d);
+      osc.frequency.setValueAtTime(note.f, start);
+      osc.detune.setValueAtTime(index % 2 ? 3 : -3, start);
+      osc.connect(gain); osc.start(start); osc.stop(start + note.d + .04);
+    });
+    const shimmer = ac.createOscillator(); shimmer.type = 'sine';
+    const shimmerGain = ac.createGain(); shimmerGain.connect(master);
+    shimmer.frequency.setValueAtTime(2093, now + .7);
+    shimmerGain.gain.setValueAtTime(.001, now + .7);
+    shimmerGain.gain.exponentialRampToValueAtTime(.035, now + .82);
+    shimmerGain.gain.exponentialRampToValueAtTime(.001, now + 1.55);
+    shimmer.connect(shimmerGain); shimmer.start(now + .7); shimmer.stop(now + 1.6);
+  } catch (_) { /* Cosmetic fanfare sound can fail silently. */ }
+}
 
-    const boom = ac.createOscillator(); boom.type = 'sine';
-    boom.frequency.setValueAtTime(95, now);
-    boom.frequency.exponentialRampToValueAtTime(34, now + .22);
-    boom.connect(master); boom.start(now); boom.stop(now + .32);
+function syncMusicVolume() {
+  const audio = $('bgMusic');
+  if (!audio) return;
+  const slider = $('musicVolume');
+  const level = Math.max(0, Math.min(100, Number(slider.value || 0)));
+  const volume = level / 100;
+  audio.volume = volume;
+  audio.muted = volume <= 0;
+  $('musicOut').textContent = String(level);
+  slider.style.setProperty('--level', `${level}%`);
+}
 
-    const crackBuffer = ac.createBuffer(1, Math.floor(ac.sampleRate * .46), ac.sampleRate);
-    const crackData = crackBuffer.getChannelData(0);
-    for (let i = 0; i < crackData.length; i += 1) {
-      const t = i / crackData.length;
-      crackData[i] = (Math.random() * 2 - 1) * Math.exp(-t * 10.5);
-    }
-    const crack = ac.createBufferSource(); crack.buffer = crackBuffer;
-    const highpass = ac.createBiquadFilter(); highpass.type = 'highpass'; highpass.frequency.value = 680;
-    const lowpass = ac.createBiquadFilter(); lowpass.type = 'lowpass'; lowpass.frequency.value = 4800;
-    crack.connect(highpass); highpass.connect(lowpass); lowpass.connect(master); crack.start(now);
-
-    const tailBuffer = ac.createBuffer(1, Math.floor(ac.sampleRate * .62), ac.sampleRate);
-    const tailData = tailBuffer.getChannelData(0);
-    for (let i = 0; i < tailData.length; i += 1) {
-      const t = i / tailData.length;
-      tailData[i] = (Math.random() * 2 - 1) * Math.exp(-t * 4.2) * .36;
-    }
-    const tail = ac.createBufferSource(); tail.buffer = tailBuffer;
-    const tailFilter = ac.createBiquadFilter(); tailFilter.type = 'lowpass'; tailFilter.frequency.value = 950;
-    tail.connect(tailFilter); tailFilter.connect(master); tail.start(now + .055);
-  } catch (_) { /* Cosmetic shotgun sound can fail silently. */ }
+function startBackgroundMusic() {
+  const audio = $('bgMusic');
+  if (!audio) return;
+  syncMusicVolume();
+  if (audio.volume <= 0) return;
+  audio.play().catch(() => {
+    /* Browsers may wait for the next direct user gesture. */
+  });
 }
 
 function openMissionGate() {
@@ -120,7 +153,6 @@ async function loadDemoFile(kind) {
     if (!response.ok || !payload.ok) throw new Error(payload.error || 'Demo upload failed.');
     loadDataset(payload, { mode: 'multivariate' });
     setSelectValue('targetColumn', demo.target);
-    setSelectValue('timeColumn', demo.time);
     $('frequency').value = demo.frequency;
     state.selectedXregs = state.numeric.filter((name) => name !== $('targetColumn').value && name !== $('timeColumn').value);
     updateSeries();
@@ -159,10 +191,9 @@ function loadDataset(payload, options = {}) {
   $('forecastMode').disabled = !state.numeric.length;
   $('forecastMode').value = options.mode === 'multivariate' ? 'multivariate' : 'univariate';
   const time = $('timeColumn');
-  time.innerHTML = '<option value="">Row index</option>' + state.columns.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+  time.innerHTML = '<option value="">Row Index</option>' + state.columns.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
   time.disabled = false;
-  const probableTime = state.columns.find((name) => /date|time|month|year|period/i.test(name));
-  if (probableTime) time.value = probableTime;
+  time.value = '';
   $('datasetMeta').textContent = `${payload.row_count.toLocaleString()} observations received · ${state.columns.length} columns · ${state.numeric.length} numeric signals`;
   $('decomposeBtn').disabled = !state.numeric.length;
   $('proceedBtn').disabled = !state.numeric.length;
@@ -520,8 +551,6 @@ function suggestSeasonality() {
   const acf = autocorrelation(state.series, maxLag);
   const pacf = partialAutocorrelation(state.series, maxLag);
   const recommendations = recommendCycles(acf, pacf, state.series.length);
-  drawCorrelationBars($('acfChart'), acf, state.series.length, colors.ARIMA, 'ACF');
-  drawCorrelationBars($('pacfChart'), pacf, state.series.length, colors.ETS, 'PACF');
   $('seasonalityRecommendations').innerHTML = recommendations.length
     ? recommendations.map((item, index) => `<button type="button" data-cycle="${item.lag}"><b>#${index + 1} · ${item.lag}</b><span>ACF ${item.acf.toFixed(3)} · PACF ${item.pacf.toFixed(3)} · score ${item.score.toFixed(2)}</span></button>`).join('')
     : '<div class="recommendation-empty">No strong cycle peak found. Keep frequency at 1 or use domain knowledge.</div>';
@@ -532,7 +561,11 @@ function suggestSeasonality() {
     toast(`Seasonality frequency set to ${button.dataset.cycle}.`);
   }));
   $('seasonalityPanel').classList.remove('hidden');
-  $('seasonalityPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  requestAnimationFrame(() => {
+    drawCorrelationBars($('acfChart'), acf, state.series.length, colors.ARIMA, 'ACF');
+    drawCorrelationBars($('pacfChart'), pacf, state.series.length, colors.ETS, 'PACF');
+    $('seasonalityPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }
 
 function navigate(step) {
@@ -561,7 +594,7 @@ function buildXregPayload() {
 async function runModels() {
   const models = [...document.querySelectorAll('input[name=model]:checked')].map((input) => input.value);
   if (!models.length) { toast('Select at least one forecast engine.'); return; }
-  playShotgunSound(); $('loading').classList.remove('hidden');
+  playWinFanfareSound(); $('loading').classList.remove('hidden');
   setTimeout(() => { $('loadingText').textContent = 'Synchronizing model trajectories…'; }, 450);
   try {
     const xreg = buildXregPayload();
@@ -653,7 +686,7 @@ function resetMission() {
   $('targetColumn').disabled = true;
   $('forecastMode').value = 'univariate';
   $('forecastMode').disabled = true;
-  $('timeColumn').innerHTML = '<option>Row index</option>';
+  $('timeColumn').innerHTML = '<option value="">Row Index</option>';
   $('timeColumn').disabled = true;
   $('frequency').value = '12';
   $('trainPct').value = '80';
@@ -683,10 +716,11 @@ function resetMission() {
 }
 
 document.addEventListener('pointerdown', (event) => {
-  const actionable = event.target.closest('button,select,.upload-zone,.model-cards label,.xreg-list label,.switch');
+  startBackgroundMusic();
+  const actionable = event.target.closest('button,select,input[type=range],.upload-zone,.model-cards label,.xreg-list label,.switch,.sound-control');
   if (!actionable || actionable.closest('#runModels')) return;
   if ((actionable.tagName === 'BUTTON' || actionable.tagName === 'SELECT') && actionable.disabled) return;
-  playModernClickSound();
+  playMicroSwitchClickSound();
 }, true);
 
 document.querySelectorAll('[data-go]').forEach(btn => btn.addEventListener('click', () => navigate(Number(btn.dataset.go))));
@@ -711,6 +745,7 @@ $('forecastMode').addEventListener('change', () => {
   if (isMultivariate() && !state.selectedXregs.length) state.selectedXregs = state.numeric.filter((name) => name !== $('targetColumn').value && name !== $('timeColumn').value);
   renderXregPanel();
 });
+$('musicVolume').addEventListener('input', () => { syncMusicVolume(); startBackgroundMusic(); });
 $('trainPct').addEventListener('input', updatePartition); $('frequency').addEventListener('change', () => { updatePartition(); if (!$('decompositionPanel').classList.contains('hidden')) drawDecomposition(); });
 $('xregPlotColumn').addEventListener('change', () => drawXregChart());
 $('suggestSeasonalityBtn').addEventListener('click', suggestSeasonality);
@@ -722,4 +757,6 @@ $('selectAll').addEventListener('click', () => { const boxes = [...document.quer
 [['nnetP','pOut',v=>v],['nnetSP','POut',v=>v],['nnetSize','sizeOut',v=>v],['nnetRepeats','repeatsOut',v=>v],['nnetLambda','lambdaOut',v=>(10 ** Number(v)).toPrecision(1)]].forEach(([id,out,format]) => $(id).addEventListener('input', () => $(out).textContent = format($(id).value)));
 addEventListener('pointermove', e => { state.mouse.x = e.clientX - innerWidth / 2; state.mouse.y = e.clientY - innerHeight / 2; });
 addEventListener('resize', () => { clearTimeout(state.resizeTimer); state.resizeTimer = setTimeout(() => { if (state.step === 1) updatePartition(); if (state.step === 3) drawResults(); if (!$('decompositionPanel').classList.contains('hidden')) drawDecomposition(); }, 120); });
+syncMusicVolume();
+startBackgroundMusic();
 initSpace();
